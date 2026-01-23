@@ -158,6 +158,9 @@
     if (command === "debugTimecode") {
       return evalExtendScript("debugTimecode", payload || {});
     }
+    if (command === "setPlayheadTimecode") {
+      return evalExtendScript("setPlayheadTimecode", payload || {});
+    }
     if (command === "toggleVideoTrack") {
       return evalExtendScript("toggleVideoTrack", payload || {});
     }

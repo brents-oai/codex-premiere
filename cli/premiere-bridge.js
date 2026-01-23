@@ -13,6 +13,7 @@ Usage:
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
+  premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
   premiere-bridge add-markers --file markers.json [--port N] [--token TOKEN]
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
@@ -192,6 +193,15 @@ async function main() {
       throw new Error("Provide --timecode for debug-timecode");
     }
     const result = await sendCommand(config, "debugTimecode", { timecode: args.timecode });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-playhead") {
+    if (!args.timecode) {
+      throw new Error("Provide --timecode for set-playhead");
+    }
+    const result = await sendCommand(config, "setPlayheadTimecode", { timecode: args.timecode });
     console.log(JSON.stringify(result, null, 2));
     return;
   }
