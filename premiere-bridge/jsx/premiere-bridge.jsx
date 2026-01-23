@@ -752,6 +752,25 @@ PremiereBridge.addMarkersFromJSON = function (jsonStr) {
   }
 };
 
+PremiereBridge.saveProject = function (jsonStr) {
+  try {
+    var project = app.project;
+    if (!project) {
+      return PremiereBridge._err("No project loaded");
+    }
+
+    try {
+      project.save();
+    } catch (saveErr) {
+      return PremiereBridge._err("Failed to save project", { error: String(saveErr) });
+    }
+
+    return PremiereBridge._ok({ method: "project.save", path: project.path || null });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.reloadProject = function () {
   try {
     var project = app.project;

@@ -152,6 +152,9 @@
     if (command === "reloadProject") {
       return evalExtendScript("reloadProject", {});
     }
+    if (command === "saveProject") {
+      return evalExtendScript("saveProject", payload || {});
+    }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }
