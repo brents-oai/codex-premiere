@@ -417,6 +417,81 @@ PremiereBridge.debugTimecode = function (jsonStr) {
   }
 };
 
+PremiereBridge.setPlayheadTimecode = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var timecode = payload.timecode ? String(payload.timecode) : null;
+    if (!timecode) {
+      return PremiereBridge._err("Missing timecode");
+    }
+
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var ticks = PremiereBridge._timecodeToTicks(timecode);
+    if (ticks === null || ticks === undefined || isNaN(Number(ticks))) {
+      return PremiereBridge._err("Failed to convert timecode to ticks");
+    }
+
+    var tickValue = Number(ticks);
+    var tickString = String(Math.round(tickValue));
+    var method = null;
+    var errors = [];
+    var setOk = false;
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    if (qeSeq && qeSeq.setPlayerPosition) {
+      try {
+        qeSeq.setPlayerPosition(tickString);
+        setOk = true;
+        method = "qe.setPlayerPosition";
+      } catch (errQeString) {
+        try {
+          qeSeq.setPlayerPosition(tickValue);
+          setOk = true;
+          method = "qe.setPlayerPosition";
+        } catch (errQeNumber) {
+          errors.push(String(errQeNumber || errQeString));
+        }
+      }
+    }
+
+    if (!setOk && sequence.setPlayerPosition) {
+      try {
+        sequence.setPlayerPosition(tickString);
+        setOk = true;
+        method = "dom.setPlayerPosition";
+      } catch (errDomString) {
+        try {
+          sequence.setPlayerPosition(tickValue);
+          setOk = true;
+          method = "dom.setPlayerPosition";
+        } catch (errDomNumber) {
+          try {
+            var t = new Time();
+            t.ticks = tickString;
+            sequence.setPlayerPosition(t);
+            setOk = true;
+            method = "dom.setPlayerPosition(Time)";
+          } catch (errDomTime) {
+            errors.push(String(errDomTime || errDomNumber || errDomString));
+          }
+        }
+      }
+    }
+
+    if (!setOk) {
+      return PremiereBridge._err("Unable to set playhead position", { errors: errors });
+    }
+
+    return PremiereBridge._ok({ timecode: timecode, ticks: tickString, method: method });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.addMarkersFromJSON = function (jsonStr) {
   try {
     var data = PremiereBridge._parse(jsonStr);
