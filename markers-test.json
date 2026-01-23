@@ -1,0 +1,9 @@
+{
+  "markers": [
+    { "timecode": "00;00;10;00", "name": "Intro Beat", "comment": "Start of intro", "colorIndex": 4 },
+    { "timecode": "00;00;30;00", "name": "Cutaway", "comment": "B-roll insert", "colorIndex": 6 },
+    { "timecode": "00;01;00;00", "name": "Key Point", "comment": "Main idea", "colorIndex": 3 },
+    { "timecode": "00;01;30;00", "name": "Quote", "comment": "Pull quote", "colorIndex": 2 },
+    { "timecode": "00;01;55;00", "name": "Wrap", "comment": "Closing beat", "colorIndex": 5 }
+  ]
+}

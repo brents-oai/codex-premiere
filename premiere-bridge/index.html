@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Premiere Bridge</title>
+    <link rel="stylesheet" href="css/panel.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1>Premiere Bridge</h1>
+        <p class="sub">Local IPC bridge for Premiere Pro.</p>
+      </header>
+
+      <section class="card">
+        <div class="row between">
+          <div>
+            <div class="label">Server status</div>
+            <div id="status" class="status offline">Offline</div>
+          </div>
+          <div class="buttons">
+            <button id="startBtn" class="primary">Start</button>
+            <button id="stopBtn">Stop</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="label">Connection</div>
+        <div class="field">
+          <label for="port">Port</label>
+          <input id="port" type="number" min="1" max="65535" />
+        </div>
+        <div class="field">
+          <label for="token">Token</label>
+          <div class="token-row">
+            <input id="token" type="text" />
+            <button id="regenBtn">Regenerate</button>
+          </div>
+        </div>
+        <div class="row between">
+          <div class="hint" id="configPath"></div>
+          <button id="saveBtn" class="primary">Save</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="label">Logs</div>
+        <pre id="log"></pre>
+      </section>
+
+      <section class="card">
+        <div class="label">Quick test</div>
+        <div class="row gap">
+          <button id="pingBtn">Ping</button>
+          <button id="reloadBtn">Reload project</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="js/panel.js"></script>
+  </body>
+</html>

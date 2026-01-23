@@ -1,0 +1,19 @@
+{
+  "markers": [
+    { "timecode": "00;00;05;00", "name": "Green", "comment": "color name", "color": "Green" },
+    { "timecode": "00;00;10;00", "name": "Red", "comment": "color name", "color": "Red" },
+    { "timecode": "00;00;15;00", "name": "Purple", "comment": "color name", "color": "Purple" },
+    { "timecode": "00;00;20;00", "name": "Orange", "comment": "color name", "color": "Orange" },
+    { "timecode": "00;00;25;00", "name": "Yellow", "comment": "color name", "color": "Yellow" },
+    { "timecode": "00;00;30;00", "name": "White", "comment": "color name", "color": "White" },
+    { "timecode": "00;00;35;00", "name": "Blue", "comment": "color name", "color": "Blue" },
+    { "timecode": "00;00;40;00", "name": "Cyan", "comment": "color name", "color": "Cyan" },
+    { "timecode": "00;00;45;00", "name": "RedValue", "comment": "color value", "colorValue": 4281740498 },
+    { "timecode": "00;00;50;00", "name": "PurpleValue", "comment": "color value", "colorValue": 4289825711 },
+    { "timecode": "00;00;55;00", "name": "OrangeValue", "comment": "color value", "colorValue": 4280578025 },
+    { "timecode": "00;01;00;00", "name": "YellowValue", "comment": "color value", "colorValue": 4281049552 },
+    { "timecode": "00;01;05;00", "name": "WhiteValue", "comment": "color value", "colorValue": 4294967295 },
+    { "timecode": "00;01;10;00", "name": "BlueValue", "comment": "color value", "colorValue": 4294741314 },
+    { "timecode": "00;01;15;00", "name": "CyanValue", "comment": "color value", "colorValue": 4292277273 }
+  ]
+}

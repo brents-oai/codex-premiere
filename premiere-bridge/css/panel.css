@@ -1,0 +1,143 @@
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --text: #e9edf1;
+  --muted: #9aa3ad;
+  --accent: #3fb28a;
+  --accent-strong: #2b8b6c;
+  --border: #2a2f3a;
+}
+
+* {
+  box-sizing: border-box;
+  font-family: "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+header h1 {
+  margin: 0 0 4px 0;
+  font-size: 20px;
+}
+
+.sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status {
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.status.online { color: var(--accent); }
+.status.offline { color: #d66b6b; }
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+
+.row.gap {
+  gap: 8px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.field {
+  margin-bottom: 10px;
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0c0e13;
+  color: var(--text);
+}
+
+.token-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid var(--border);
+  background: #20242e;
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #07110d;
+  border-color: var(--accent-strong);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 220px;
+}
+
+pre {
+  margin: 0;
+  padding: 8px;
+  background: #0c0e13;
+  border-radius: 6px;
+  height: 140px;
+  overflow: auto;
+  font-size: 11px;
+  color: #c7d0d9;
+}
