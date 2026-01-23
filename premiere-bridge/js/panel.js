@@ -161,6 +161,9 @@
     if (command === "setPlayheadTimecode") {
       return evalExtendScript("setPlayheadTimecode", payload || {});
     }
+    if (command === "setInOutPoints") {
+      return evalExtendScript("setInOutPoints", payload || {});
+    }
     if (command === "toggleVideoTrack") {
       return evalExtendScript("toggleVideoTrack", payload || {});
     }
