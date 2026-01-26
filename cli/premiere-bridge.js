@@ -19,6 +19,7 @@ Usage:
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
   premiere-bridge set-in-out --in 00;00;10;00 --out 00;00;20;00 [--port N] [--token TOKEN]
+  premiere-bridge razor-cut (--timecode 00;00;10;00 | --seconds 10 | --ticks 254016000000) [--unit ticks|seconds|timecode|playhead] [--port N] [--token TOKEN]
   premiere-bridge add-markers --file markers.json [--port N] [--token TOKEN]
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
@@ -257,6 +258,28 @@ async function main() {
       inTimecode: args.in,
       outTimecode: args.out
     });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "razor-cut") {
+    if (args.timecode === undefined && args.seconds === undefined && args.ticks === undefined) {
+      throw new Error("Provide --timecode, --seconds, or --ticks for razor-cut");
+    }
+    const payload = {};
+    if (args.timecode !== undefined) {
+      payload.timecode = String(args.timecode);
+    }
+    if (args.seconds !== undefined) {
+      payload.seconds = Number(args.seconds);
+    }
+    if (args.ticks !== undefined) {
+      payload.ticks = Number(args.ticks);
+    }
+    if (args.unit !== undefined) {
+      payload.unit = String(args.unit);
+    }
+    const result = await sendCommand(config, "razorAtTimecode", payload);
     console.log(JSON.stringify(result, null, 2));
     return;
   }

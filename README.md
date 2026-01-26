@@ -41,6 +41,7 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
 ./cli/premiere-bridge.js set-playhead --timecode 00;00;10;00
 ./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
+./cli/premiere-bridge.js razor-cut --timecode "00;00;10;00"
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
 ./cli/premiere-bridge.js toggle-video-track --track V1 --visible false
@@ -78,6 +79,7 @@ Color indices:
 - `debug-timecode`
 - `set-playhead`
 - `set-in-out`
+- `razor-cut`
 - `add-markers`
 - `add-markers-file`
 - `toggle-video-track`

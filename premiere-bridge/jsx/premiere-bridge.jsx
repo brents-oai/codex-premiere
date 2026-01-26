@@ -636,6 +636,581 @@ PremiereBridge.setInOutPoints = function (jsonStr) {
   }
 };
 
+PremiereBridge.razorAtTimecode = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var ticksValue = null;
+    var source = null;
+    if (payload.ticks !== undefined && payload.ticks !== null) {
+      var rawTicks = Number(payload.ticks);
+      if (!isNaN(rawTicks)) {
+        ticksValue = rawTicks;
+        source = "ticks";
+      }
+    }
+    if (ticksValue === null && payload.timecode !== undefined && payload.timecode !== null) {
+      var ticksFromTimecode = PremiereBridge._timecodeToTicks(String(payload.timecode));
+      if (ticksFromTimecode !== null && ticksFromTimecode !== undefined && !isNaN(Number(ticksFromTimecode))) {
+        ticksValue = Number(ticksFromTimecode);
+        source = "timecode";
+      }
+    }
+    if (ticksValue === null && payload.seconds !== undefined && payload.seconds !== null) {
+      var secondsValue = Number(payload.seconds);
+      if (!isNaN(secondsValue)) {
+        ticksValue = Number(PremiereBridge._secondsToTicks(secondsValue));
+        source = "seconds";
+      }
+    }
+
+    if (ticksValue === null) {
+      return PremiereBridge._err("Provide timecode, seconds, or ticks");
+    }
+
+    ticksValue = Math.round(Number(ticksValue));
+    if (isNaN(ticksValue)) {
+      return PremiereBridge._err("Failed to compute ticks", { payload: payload });
+    }
+
+    var ticksString = String(ticksValue);
+    var secondsValue = ticksValue / PremiereBridge.TICKS_PER_SECOND;
+    var errors = [];
+    var playheadMethod = null;
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    if (qeSeq && qeSeq.setPlayerPosition) {
+      try {
+        qeSeq.setPlayerPosition(ticksString);
+        playheadMethod = "qe.setPlayerPosition(string)";
+      } catch (errQeString) {
+        try {
+          qeSeq.setPlayerPosition(ticksValue);
+          playheadMethod = "qe.setPlayerPosition(number)";
+        } catch (errQeNumber) {
+          errors.push("setPlayerPosition (QE): " + String(errQeNumber || errQeString));
+        }
+      }
+    }
+    if (!playheadMethod && sequence.setPlayerPosition) {
+      try {
+        sequence.setPlayerPosition(ticksString);
+        playheadMethod = "dom.setPlayerPosition(string)";
+      } catch (errDomString) {
+        try {
+          sequence.setPlayerPosition(ticksValue);
+          playheadMethod = "dom.setPlayerPosition(number)";
+        } catch (errDomNumber) {
+          try {
+            var playheadTime = new Time();
+            playheadTime.ticks = ticksString;
+            sequence.setPlayerPosition(playheadTime);
+            playheadMethod = "dom.setPlayerPosition(Time)";
+          } catch (errDomTime) {
+            errors.push("setPlayerPosition (DOM): " + String(errDomTime || errDomNumber || errDomString));
+          }
+        }
+      }
+    }
+
+    function getTrackCount(collection) {
+      if (!collection) {
+        return 0;
+      }
+      if (collection.numTracks !== undefined && collection.numTracks !== null) {
+        var n = Number(collection.numTracks);
+        if (!isNaN(n) && n > 0) {
+          return n;
+        }
+      }
+      if (collection.length !== undefined && collection.length !== null) {
+        var len = Number(collection.length);
+        if (!isNaN(len) && len > 0) {
+          return len;
+        }
+      }
+      var count = 0;
+      for (var i = 0; i < 64; i++) {
+        if (collection[i]) {
+          count = i + 1;
+        }
+      }
+      return count;
+    }
+
+    var videoCount = getTrackCount(sequence.videoTracks);
+    var audioCount = getTrackCount(sequence.audioTracks);
+
+    var resolvedTimecode = payload.timecode ? String(payload.timecode) : null;
+    if (!resolvedTimecode && qeSeq && qeSeq.ticksToTimecode) {
+      try {
+        resolvedTimecode = qeSeq.ticksToTimecode(ticksString);
+      } catch (errTicksToTc) {
+      }
+    }
+    var normalizedTimecode = resolvedTimecode ? String(resolvedTimecode).replace(/;/g, ":") : null;
+
+    function firstTrack(kind) {
+      if (!qeSeq) {
+        return null;
+      }
+      try {
+        if (kind === "video" && qeSeq.getVideoTrackAt && videoCount > 0) {
+          return qeSeq.getVideoTrackAt(0);
+        }
+        if (kind === "audio" && qeSeq.getAudioTrackAt && audioCount > 0) {
+          return qeSeq.getAudioTrackAt(0);
+        }
+      } catch (errFirstTrack) {
+      }
+      return null;
+    }
+
+    function timeToTicks(value) {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      try {
+        if (value.ticks !== undefined && value.ticks !== null) {
+          var ticksFromObj = Number(value.ticks);
+          if (!isNaN(ticksFromObj)) {
+            return ticksFromObj;
+          }
+        }
+      } catch (errTicks) {
+      }
+      try {
+        if (value.seconds !== undefined && value.seconds !== null) {
+          var secondsFromObj = Number(value.seconds);
+          if (!isNaN(secondsFromObj)) {
+            return secondsFromObj * PremiereBridge.TICKS_PER_SECOND;
+          }
+        }
+      } catch (errSeconds) {
+      }
+      var numeric = Number(value);
+      if (!isNaN(numeric)) {
+        return numeric;
+      }
+      return null;
+    }
+
+    function getDomTrack(collection, index) {
+      if (!collection || index < 0) {
+        return null;
+      }
+      try {
+        if (collection[index]) {
+          return collection[index];
+        }
+      } catch (errIndex) {
+      }
+      return null;
+    }
+
+    function getClipCount(track) {
+      if (!track || !track.clips) {
+        return 0;
+      }
+      var clips = track.clips;
+      try {
+        if (clips.numItems !== undefined && clips.numItems !== null) {
+          var n = Number(clips.numItems);
+          if (!isNaN(n)) {
+            return n;
+          }
+        }
+      } catch (errNumItems) {
+      }
+      try {
+        if (clips.length !== undefined && clips.length !== null) {
+          var len = Number(clips.length);
+          if (!isNaN(len)) {
+            return len;
+          }
+        }
+      } catch (errLength) {
+      }
+      var count = 0;
+      for (var i = 0; i < 256; i++) {
+        try {
+          if (clips[i]) {
+            count = i + 1;
+          }
+        } catch (errIndex) {
+          break;
+        }
+      }
+      return count;
+    }
+
+    function trackSpansCut(track, cutTicks) {
+      if (!track || !track.clips) {
+        return false;
+      }
+      var clips = track.clips;
+      for (var i = 0; i < 256; i++) {
+        var clip = null;
+        try {
+          clip = clips[i];
+        } catch (errClip) {
+          break;
+        }
+        if (!clip) {
+          continue;
+        }
+        var startTicks = timeToTicks(clip.start);
+        var endTicks = timeToTicks(clip.end);
+        if (startTicks !== null && endTicks !== null && startTicks < cutTicks && endTicks > cutTicks) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function trackDiagnostics(kind, collection, count, fallbackGetterName) {
+      var diag = {
+        kind: kind,
+        count: count,
+        totalClips: 0,
+        spanningCount: 0,
+        tracks: []
+      };
+      if (count <= 0) {
+        return diag;
+      }
+      for (var i = 0; i < count; i++) {
+        var track = null;
+        var sourceUsed = "dom";
+        try {
+          track = getDomTrack(collection, i);
+        } catch (errDomTrack) {
+        }
+        if (!track && qeSeq && fallbackGetterName && qeSeq[fallbackGetterName]) {
+          sourceUsed = "qe";
+          try {
+            track = qeSeq[fallbackGetterName](i);
+          } catch (errQeTrack) {
+            diag.tracks.push({ index: i, error: String(errQeTrack), source: sourceUsed });
+            continue;
+          }
+        }
+        if (!track) {
+          diag.tracks.push({ index: i, missing: true, source: sourceUsed });
+          continue;
+        }
+        var clipCount = getClipCount(track);
+        var spans = trackSpansCut(track, ticksValue);
+        diag.totalClips += clipCount;
+        if (spans) {
+          diag.spanningCount++;
+        }
+        diag.tracks.push({
+          index: i,
+          clips: clipCount,
+          spansCut: spans,
+          source: sourceUsed
+        });
+      }
+      return diag;
+    }
+
+    function totalClips(diag) {
+      if (!diag) {
+        return 0;
+      }
+      var total = Number(diag.totalClips);
+      if (!isNaN(total)) {
+        return total;
+      }
+      var sum = 0;
+      if (diag.tracks && diag.tracks.length) {
+        for (var i = 0; i < diag.tracks.length; i++) {
+          var entry = diag.tracks[i];
+          if (!entry) {
+            continue;
+          }
+          var c = Number(entry.clips);
+          if (!isNaN(c)) {
+            sum += c;
+          }
+        }
+      }
+      return sum;
+    }
+
+    var beforeDiag = {
+      video: trackDiagnostics("video", sequence.videoTracks, videoCount, "getVideoTrackAt"),
+      audio: trackDiagnostics("audio", sequence.audioTracks, audioCount, "getAudioTrackAt")
+    };
+    var beforeTotalClips = totalClips(beforeDiag.video) + totalClips(beforeDiag.audio);
+
+    var firstVideoTrack = firstTrack("video");
+    var firstAudioTrack = firstTrack("audio");
+
+    var availability = {
+      qeSequenceAddEdit: !!(qeSeq && qeSeq.addEdit),
+      qeSequenceRazor: !!(qeSeq && qeSeq.razor),
+      qeGetVideoTrackAt: !!(qeSeq && qeSeq.getVideoTrackAt),
+      qeGetAudioTrackAt: !!(qeSeq && qeSeq.getAudioTrackAt),
+      qeTrackRazor: !!(
+        (firstVideoTrack && firstVideoTrack.razor) || (firstAudioTrack && firstAudioTrack.razor)
+      ),
+      qeTrackAddEdit: !!(
+        (firstVideoTrack && firstVideoTrack.addEdit) || (firstAudioTrack && firstAudioTrack.addEdit)
+      ),
+      appExecuteCommand: !!(app && app.executeCommand)
+    };
+
+    var cutUnit = payload.unit ? String(payload.unit).toLowerCase() : "ticks";
+    function unitArgument(unit) {
+      if (unit === "playhead") {
+        return { unit: "playhead", value: null };
+      }
+      if (unit === "seconds") {
+        return { unit: "seconds", value: secondsValue };
+      }
+      if (unit === "timecode") {
+        if (!normalizedTimecode) {
+          return null;
+        }
+        return { unit: "timecode", value: normalizedTimecode };
+      }
+      if (unit === "ticks-number") {
+        return { unit: "ticks-number", value: ticksValue };
+      }
+      return { unit: "ticks", value: ticksString };
+    }
+
+    var unitArg = unitArgument(cutUnit);
+    if (!unitArg) {
+      return PremiereBridge._err("Timecode unit requested but no timecode available", {
+        ticks: ticksString,
+        unit: cutUnit,
+        available: availability
+      });
+    }
+
+    var cutMethod = null;
+    var cutDetails = {
+      unit: unitArg.unit
+    };
+
+    function callCut(target, methodName, label) {
+      if (!target || !target[methodName]) {
+        return { ok: false, error: label + " unavailable" };
+      }
+      try {
+        if (unitArg.value === null) {
+          target[methodName]();
+        } else {
+          target[methodName](unitArg.value);
+        }
+        return { ok: true, method: label + "(" + unitArg.unit + ")" };
+      } catch (errCall) {
+        return { ok: false, error: label + ": " + String(errCall) };
+      }
+    }
+
+    function beforeEntry(diag, index) {
+      if (!diag || !diag.tracks || !diag.tracks.length) {
+        return null;
+      }
+      for (var i = 0; i < diag.tracks.length; i++) {
+        if (diag.tracks[i] && diag.tracks[i].index === index) {
+          return diag.tracks[i];
+        }
+      }
+      return null;
+    }
+
+    function razorTracks(kind, count, getterName, diagBefore) {
+      var result = {
+        kind: kind,
+        count: count,
+        attempted: 0,
+        called: 0,
+        detected: 0,
+        spanningCount: diagBefore ? diagBefore.spanningCount : 0,
+        methods: [],
+        errors: [],
+        tracks: []
+      };
+
+      if (!qeSeq || !qeSeq[getterName] || count <= 0) {
+        return result;
+      }
+
+      for (var i = 0; i < count; i++) {
+        var track = null;
+        try {
+          track = qeSeq[getterName](i);
+        } catch (errTrack) {
+          result.errors.push(kind + "[" + i + "] get: " + String(errTrack));
+        }
+        if (!track) {
+          result.tracks.push({ index: i, missing: true });
+          continue;
+        }
+
+        result.attempted++;
+
+        var domCollection = kind === "video" ? sequence.videoTracks : sequence.audioTracks;
+        var domTrack = getDomTrack(domCollection, i);
+        var diagEntry = beforeEntry(diagBefore, i);
+        var beforeCount = diagEntry && diagEntry.clips !== undefined ? Number(diagEntry.clips) : getClipCount(domTrack || track);
+        if (isNaN(beforeCount)) {
+          beforeCount = getClipCount(domTrack || track);
+        }
+        var spansCut = diagEntry && diagEntry.spansCut !== undefined ? !!diagEntry.spansCut : trackSpansCut(domTrack || track, ticksValue);
+
+        var cutCall = callCut(track, "razor", kind + "[" + i + "].razor");
+        if (!cutCall.ok) {
+          cutCall = callCut(track, "addEdit", kind + "[" + i + "].addEdit");
+        }
+        if (cutCall.ok) {
+          result.called++;
+          result.methods.push(cutCall.method);
+        } else if (cutCall.error) {
+          result.errors.push(cutCall.error);
+        }
+
+        var afterDomTrack = getDomTrack(domCollection, i);
+        var afterCount = getClipCount(afterDomTrack || track);
+        var detected = afterCount > beforeCount;
+        if (detected) {
+          result.detected++;
+        }
+
+        result.tracks.push({
+          index: i,
+          beforeClips: beforeCount,
+          afterClips: afterCount,
+          spansCut: spansCut,
+          cutDetected: detected
+        });
+      }
+
+      return result;
+    }
+
+    var videoResult = razorTracks("video", videoCount, "getVideoTrackAt", beforeDiag.video);
+    var audioResult = razorTracks("audio", audioCount, "getAudioTrackAt", beforeDiag.audio);
+    var trackCalls = videoResult.called + audioResult.called;
+    var trackDetections = videoResult.detected + audioResult.detected;
+    var spansEligible = beforeDiag.video.spanningCount + beforeDiag.audio.spanningCount;
+
+    if (trackCalls > 0) {
+      cutMethod = "qe.track.razor/addEdit";
+      cutDetails.video = videoResult;
+      cutDetails.audio = audioResult;
+    }
+
+    if (!cutMethod && qeSeq && qeSeq.addEdit) {
+      var seqAddEdit = callCut(qeSeq, "addEdit", "qe.addEdit");
+      if (seqAddEdit.ok) {
+        cutMethod = "qe.addEdit";
+        cutDetails.sequence = seqAddEdit.method;
+      } else if (seqAddEdit.error) {
+        errors.push(seqAddEdit.error);
+      }
+    }
+
+    if (!cutMethod && qeSeq && qeSeq.razor) {
+      var seqRazor = callCut(qeSeq, "razor", "qe.razor");
+      if (seqRazor.ok) {
+        cutMethod = "qe.razor";
+        cutDetails.sequence = seqRazor.method;
+      } else if (seqRazor.error) {
+        errors.push(seqRazor.error);
+      }
+    }
+
+    if (!cutMethod && payload.commandId !== undefined && payload.commandId !== null && app.executeCommand) {
+      var commandId = Number(payload.commandId);
+      if (!isNaN(commandId)) {
+        try {
+          app.executeCommand(commandId);
+          cutMethod = "app.executeCommand(" + commandId + ")";
+          cutDetails.sequence = "app.executeCommand(" + commandId + ")";
+        } catch (errExec) {
+          errors.push("app.executeCommand: " + String(errExec));
+        }
+      }
+    }
+
+    var afterDiag = {
+      video: trackDiagnostics("video", sequence.videoTracks, videoCount, "getVideoTrackAt"),
+      audio: trackDiagnostics("audio", sequence.audioTracks, audioCount, "getAudioTrackAt")
+    };
+    var afterTotalClips = totalClips(afterDiag.video) + totalClips(afterDiag.audio);
+    var clipDelta = afterTotalClips - beforeTotalClips;
+
+    var evidenceOfCut = clipDelta > 0 || trackDetections > 0;
+
+    if (!cutMethod) {
+      return PremiereBridge._err("Unable to razor at timecode", {
+        ticks: ticksString,
+        timecode: resolvedTimecode,
+        source: source,
+        unit: unitArg.unit,
+        playheadMethod: playheadMethod,
+        available: availability,
+        diagnostics: {
+          before: beforeDiag,
+          after: afterDiag,
+          clipDelta: clipDelta,
+          spansEligible: spansEligible,
+          trackCalls: trackCalls,
+          trackDetections: trackDetections
+        },
+        errors: errors
+      });
+    }
+
+    var partial = spansEligible > 0 && trackDetections > 0 && trackDetections < spansEligible;
+    var detectionConfidence = "none";
+    if (trackDetections > 0 && spansEligible > 0) {
+      detectionConfidence = "medium";
+    } else if (trackDetections > 0 || spansEligible > 0 || beforeTotalClips > 0) {
+      detectionConfidence = "low";
+    }
+
+    return PremiereBridge._ok({
+      ticks: ticksString,
+      timecode: resolvedTimecode,
+      source: source,
+      unit: unitArg.unit,
+      playheadMethod: playheadMethod,
+      cutMethod: cutMethod,
+      cutDetails: cutDetails,
+      partial: partial,
+      detectionConfidence: detectionConfidence,
+      detectionEvidence: evidenceOfCut,
+      trackCounts: {
+        video: videoCount,
+        audio: audioCount
+      },
+      diagnostics: {
+        before: beforeDiag,
+        after: afterDiag,
+        clipDelta: clipDelta,
+        spansEligible: spansEligible,
+        trackCalls: trackCalls,
+        trackDetections: trackDetections
+      },
+      available: availability,
+      errors: errors
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.addMarkersFromJSON = function (jsonStr) {
   try {
     var data = PremiereBridge._parse(jsonStr);
