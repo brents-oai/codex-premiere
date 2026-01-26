@@ -14,6 +14,7 @@ Usage:
   premiere-bridge save-project [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
+  premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
@@ -197,6 +198,22 @@ async function main() {
 
   if (command === "list-sequences") {
     const result = await sendCommand(config, "listSequences", {});
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "open-sequence") {
+    if (!args.name && !args.id) {
+      throw new Error("Provide --name or --id for open-sequence");
+    }
+    const payload = {};
+    if (args.name) {
+      payload.name = String(args.name);
+    }
+    if (args.id) {
+      payload.id = String(args.id);
+    }
+    const result = await sendCommand(config, "openSequence", payload);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
