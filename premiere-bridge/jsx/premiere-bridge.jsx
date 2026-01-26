@@ -771,6 +771,290 @@ PremiereBridge.saveProject = function (jsonStr) {
   }
 };
 
+PremiereBridge._sequenceList = function () {
+  var list = [];
+  try {
+    if (!app || !app.project || !app.project.sequences) {
+      return list;
+    }
+    var sequences = app.project.sequences;
+    var count = 0;
+    if (sequences.numSequences !== undefined && sequences.numSequences !== null) {
+      count = Number(sequences.numSequences);
+    } else if (sequences.numItems !== undefined && sequences.numItems !== null) {
+      count = Number(sequences.numItems);
+    } else if (sequences.length !== undefined && sequences.length !== null) {
+      count = Number(sequences.length);
+    }
+    if (isNaN(count) || count < 0) {
+      count = 0;
+    }
+    for (var i = 0; i < count; i++) {
+      var seq = sequences[i];
+      if (!seq) {
+        continue;
+      }
+      var seqId = null;
+      try {
+        if (seq.sequenceID !== undefined && seq.sequenceID !== null) {
+          seqId = String(seq.sequenceID);
+        } else if (seq.id !== undefined && seq.id !== null) {
+          seqId = String(seq.id);
+        }
+      } catch (errId) {
+      }
+      list.push({
+        index: i,
+        name: seq.name ? String(seq.name) : null,
+        id: seqId,
+        ref: seq
+      });
+    }
+  } catch (err) {
+  }
+  return list;
+};
+
+PremiereBridge._sequenceKey = function (seqInfo) {
+  if (!seqInfo) {
+    return null;
+  }
+  if (seqInfo.id) {
+    return "id:" + String(seqInfo.id);
+  }
+  if (seqInfo.name) {
+    return "name:" + String(seqInfo.name);
+  }
+  return null;
+};
+
+PremiereBridge._uniqueSequenceName = function (baseName, existingNames) {
+  var base = String(baseName || "Sequence Copy");
+  var taken = {};
+  for (var i = 0; existingNames && i < existingNames.length; i++) {
+    if (existingNames[i]) {
+      taken[String(existingNames[i])] = true;
+    }
+  }
+  if (!taken[base]) {
+    return base;
+  }
+  for (var n = 2; n < 500; n++) {
+    var candidate = base + " " + n;
+    if (!taken[candidate]) {
+      return candidate;
+    }
+  }
+  return base + " Copy";
+};
+
+PremiereBridge._diffNewSequences = function (beforeList, afterList) {
+  var beforeKeys = {};
+  var beforeNameCounts = {};
+  for (var i = 0; beforeList && i < beforeList.length; i++) {
+    var beforeKey = PremiereBridge._sequenceKey(beforeList[i]);
+    if (beforeKey) {
+      beforeKeys[beforeKey] = true;
+    }
+    if (beforeList[i] && beforeList[i].name) {
+      var bn = String(beforeList[i].name);
+      beforeNameCounts[bn] = (beforeNameCounts[bn] || 0) + 1;
+    }
+  }
+
+  var newItems = [];
+  for (var j = 0; afterList && j < afterList.length; j++) {
+    var afterKey = PremiereBridge._sequenceKey(afterList[j]);
+    if (afterKey && !beforeKeys[afterKey]) {
+      newItems.push(afterList[j]);
+      continue;
+    }
+    if (afterList[j] && afterList[j].name) {
+      var an = String(afterList[j].name);
+      var beforeCount = beforeNameCounts[an] || 0;
+      if (beforeCount <= 0) {
+        newItems.push(afterList[j]);
+      } else {
+        beforeNameCounts[an] = beforeCount - 1;
+      }
+    }
+  }
+  return newItems;
+};
+
+PremiereBridge._findQeSequenceByName = function (name) {
+  try {
+    if (!app || !app.enableQE) {
+      return null;
+    }
+    app.enableQE();
+    if (!qe || !qe.project || !qe.project.getSequenceAt) {
+      return null;
+    }
+    var total = 0;
+    if (qe.project.numSequences !== undefined && qe.project.numSequences !== null) {
+      total = Number(qe.project.numSequences);
+    }
+    if (isNaN(total) || total <= 0) {
+      return null;
+    }
+    for (var i = 0; i < total; i++) {
+      var qeSeq = qe.project.getSequenceAt(i);
+      if (!qeSeq) {
+        continue;
+      }
+      if (qeSeq.name && String(qeSeq.name) === String(name)) {
+        return qeSeq;
+      }
+    }
+  } catch (err) {
+  }
+  return null;
+};
+
+PremiereBridge._activateSequence = function (seq, qeSeq) {
+  try {
+    if (seq && seq.projectItem && seq.projectItem.openInTimeline) {
+      seq.projectItem.openInTimeline();
+      return "projectItem.openInTimeline";
+    }
+  } catch (errDomOpen) {
+  }
+  try {
+    if (seq && seq.projectItem && seq.projectItem.setSelected) {
+      seq.projectItem.setSelected(1, 1);
+    }
+  } catch (errSelect) {
+  }
+  try {
+    if (!qeSeq && seq && seq.name) {
+      qeSeq = PremiereBridge._findQeSequenceByName(seq.name);
+    }
+    if (qeSeq && qeSeq.openInTimeline) {
+      qeSeq.openInTimeline();
+      return "qe.openInTimeline";
+    }
+  } catch (errQeOpen) {
+  }
+  try {
+    if (qeSeq && qeSeq.setActive) {
+      qeSeq.setActive();
+      return "qe.setActive";
+    }
+  } catch (errQeActive) {
+  }
+  return null;
+};
+
+PremiereBridge.duplicateSequence = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var project = app.project;
+    if (!project) {
+      return PremiereBridge._err("No project loaded");
+    }
+
+    var active = project.activeSequence;
+    if (!active) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var beforeList = PremiereBridge._sequenceList();
+    var existingNames = [];
+    for (var i = 0; i < beforeList.length; i++) {
+      if (beforeList[i] && beforeList[i].name) {
+        existingNames.push(String(beforeList[i].name));
+      }
+    }
+
+    var baseName = payload.name ? String(payload.name) : (String(active.name || "Sequence") + " Rough Cut");
+    var desiredName = PremiereBridge._uniqueSequenceName(baseName, existingNames);
+
+    var method = null;
+    var errors = [];
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var duplicated = false;
+
+    if (qeSeq && qeSeq.duplicate) {
+      try {
+        qeSeq.duplicate(desiredName);
+        duplicated = true;
+        method = "qe.duplicate(name)";
+      } catch (errQeNamed) {
+        errors.push(String(errQeNamed));
+        try {
+          qeSeq.duplicate();
+          duplicated = true;
+          method = "qe.duplicate()";
+        } catch (errQePlain) {
+          errors.push(String(errQePlain));
+        }
+      }
+    }
+
+    if (!duplicated) {
+      return PremiereBridge._err("Unable to duplicate active sequence", {
+        errors: errors,
+        available: {
+          qeDuplicate: !!(qeSeq && qeSeq.duplicate)
+        }
+      });
+    }
+
+    var afterList = PremiereBridge._sequenceList();
+    var newSequences = PremiereBridge._diffNewSequences(beforeList, afterList);
+    var newSeqInfo = newSequences.length ? newSequences[newSequences.length - 1] : null;
+    if (!newSeqInfo && afterList.length) {
+      newSeqInfo = afterList[afterList.length - 1];
+    }
+    if (!newSeqInfo || !newSeqInfo.ref) {
+      return PremiereBridge._err("Sequence duplicated but could not be located", {
+        method: method,
+        desiredName: desiredName,
+        errors: errors
+      });
+    }
+
+    var seqRef = newSeqInfo.ref;
+    var renamed = false;
+    if (seqRef.name && String(seqRef.name) !== desiredName) {
+      try {
+        seqRef.name = desiredName;
+        renamed = true;
+      } catch (errRename) {
+        errors.push(String(errRename));
+      }
+    }
+
+    var qeNewSeq = PremiereBridge._findQeSequenceByName(seqRef.name || desiredName);
+    var activateMethod = PremiereBridge._activateSequence(seqRef, qeNewSeq);
+    var activated = activateMethod ? true : false;
+
+    var seqId = null;
+    try {
+      if (seqRef.sequenceID !== undefined && seqRef.sequenceID !== null) {
+        seqId = String(seqRef.sequenceID);
+      }
+    } catch (errSeqId) {
+    }
+
+    return PremiereBridge._ok({
+      name: seqRef.name ? String(seqRef.name) : desiredName,
+      id: seqId,
+      activated: activated,
+      methods: {
+        duplicate: method,
+        activate: activateMethod
+      },
+      renamed: renamed,
+      errors: errors
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.reloadProject = function () {
   try {
     var project = app.project;
