@@ -139,6 +139,16 @@ Notes:
 - By default, transcript times are offset by the sequence start time. Use `--no-offset` if your ranges are already in sequence time.
 - Gaps are processed from end to start to keep earlier times stable.
 
+## Pre-Merge Checklist
+
+Use this quick loop before merging changes:
+
+1) Create a feature branch from `main`.
+2) Copy updated panel files into the installed extension (often `PremiereBridgeCopy`).
+3) Reload the Premiere panel.
+4) Run the relevant CLI commands and confirm the result in Premiere.
+5) Only then commit, open the PR, merge, and close the issue.
+
 ## Security
 
 The panel only listens on `127.0.0.1` and requires the shared token stored in the config file.
