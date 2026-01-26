@@ -155,6 +155,9 @@
     if (command === "saveProject") {
       return evalExtendScript("saveProject", payload || {});
     }
+    if (command === "duplicateSequence") {
+      return evalExtendScript("duplicateSequence", payload || {});
+    }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }

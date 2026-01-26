@@ -34,6 +34,7 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js ping
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
+./cli/premiere-bridge.js duplicate-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js sequence-info
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
 ./cli/premiere-bridge.js set-playhead --timecode 00;00;10;00
@@ -68,6 +69,7 @@ Color indices:
 - `ping`
 - `reload-project`
 - `save-project`
+- `duplicate-sequence`
 - `sequence-info`
 - `debug-timecode`
 - `set-playhead`
