@@ -90,6 +90,24 @@ Color indices:
 - `add-markers-file`
 - `toggle-video-track`
 
+## Rough Cut Command Set
+
+These primitives are sufficient for a safe, transcript-driven rough cut:
+
+- `duplicate-sequence` (non-destructive editing)
+- `open-sequence` / `list-sequences` (reliable context switching)
+- `sequence-inventory` (map transcript time to sequence time)
+- `razor-cut` (cut boundaries across all tracks)
+- `extract-range` (remove a time span and ripple closed)
+- `ripple-delete-selection` (selection-driven variant)
+
+Suggested workflow for transcript ranges to keep:
+
+1) Duplicate and activate the working sequence.
+2) Use `sequence-inventory` to translate transcript timecodes into sequence time.
+3) Compute the gaps between "kept" ranges.
+4) Run `extract-range` on each gap from end to start.
+
 ## Security
 
 The panel only listens on `127.0.0.1` and requires the shared token stored in the config file.
