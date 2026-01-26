@@ -230,6 +230,349 @@ PremiereBridge._sequenceStartTicks = function (sequence, qeSeq) {
   return Math.round(Number(startTicks));
 };
 
+PremiereBridge._ticksFromPayload = function (payload, prefix) {
+  if (!payload) {
+    return null;
+  }
+  var ticksKey = prefix + "Ticks";
+  if (payload[ticksKey] !== undefined && payload[ticksKey] !== null) {
+    var ticksValue = Number(payload[ticksKey]);
+    if (!isNaN(ticksValue)) {
+      return ticksValue;
+    }
+  }
+
+  var timecodeKey = prefix + "Timecode";
+  if (payload[timecodeKey] !== undefined && payload[timecodeKey] !== null) {
+    var ticksFromTimecode = PremiereBridge._timecodeToTicks(String(payload[timecodeKey]));
+    if (ticksFromTimecode !== null && ticksFromTimecode !== undefined && !isNaN(Number(ticksFromTimecode))) {
+      return Number(ticksFromTimecode);
+    }
+  }
+
+  var secondsKey = prefix + "Seconds";
+  if (payload[secondsKey] !== undefined && payload[secondsKey] !== null) {
+    var secondsValue = Number(payload[secondsKey]);
+    if (!isNaN(secondsValue)) {
+      return Number(PremiereBridge._secondsToTicks(secondsValue));
+    }
+  }
+
+  if (payload[prefix] !== undefined && payload[prefix] !== null) {
+    var raw = payload[prefix];
+    var str = String(raw);
+    if (str.indexOf(":") !== -1 || str.indexOf(";") !== -1) {
+      var ticksFromRawTimecode = PremiereBridge._timecodeToTicks(str);
+      if (ticksFromRawTimecode !== null && ticksFromRawTimecode !== undefined && !isNaN(Number(ticksFromRawTimecode))) {
+        return Number(ticksFromRawTimecode);
+      }
+    }
+    var numericRaw = Number(raw);
+    if (!isNaN(numericRaw)) {
+      return Number(PremiereBridge._secondsToTicks(numericRaw));
+    }
+  }
+
+  return null;
+};
+
+PremiereBridge._computeInOutTicks = function (payload) {
+  var inTicks = PremiereBridge._ticksFromPayload(payload, "in");
+  var outTicks = PremiereBridge._ticksFromPayload(payload, "out");
+  if (inTicks === null || outTicks === null) {
+    return {
+      ok: false,
+      error: "Missing or invalid in/out values",
+      data: { received: payload }
+    };
+  }
+
+  inTicks = Math.round(Number(inTicks));
+  outTicks = Math.round(Number(outTicks));
+  if (isNaN(inTicks) || isNaN(outTicks)) {
+    return {
+      ok: false,
+      error: "Failed to compute in/out ticks",
+      data: { inTicks: inTicks, outTicks: outTicks }
+    };
+  }
+  if (outTicks < inTicks) {
+    return {
+      ok: false,
+      error: "Out point must be after in point",
+      data: { inTicks: inTicks, outTicks: outTicks }
+    };
+  }
+
+  return {
+    ok: true,
+    inTicks: inTicks,
+    outTicks: outTicks
+  };
+};
+
+PremiereBridge._setInOutTicks = function (sequence, qeSeq, inTicks, outTicks) {
+  var methods = [];
+  var errors = [];
+
+  function setPoint(target, setterName, ticksValue, label, methodPrefix) {
+    if (!target || !target[setterName]) {
+      return false;
+    }
+    var ticksString = String(ticksValue);
+    try {
+      target[setterName](ticksString);
+      methods.push(methodPrefix + setterName + "(string)");
+      return true;
+    } catch (errString) {
+      try {
+        target[setterName](ticksValue);
+        methods.push(methodPrefix + setterName + "(number)");
+        return true;
+      } catch (errNumber) {
+        try {
+          var t = new Time();
+          t.ticks = ticksString;
+          target[setterName](t);
+          methods.push(methodPrefix + setterName + "(Time)");
+          return true;
+        } catch (errTime) {
+          errors.push(label + ": " + String(errTime || errNumber || errString));
+        }
+      }
+    }
+    return false;
+  }
+
+  var inApplied = false;
+  var outApplied = false;
+
+  // Prefer DOM here; QE accepts different units in some contexts.
+  inApplied = setPoint(sequence, "setInPoint", inTicks, "DOM in", "dom.");
+  outApplied = setPoint(sequence, "setOutPoint", outTicks, "DOM out", "dom.");
+
+  if ((!inApplied || !outApplied) && qeSeq) {
+    if (!inApplied) {
+      inApplied = setPoint(qeSeq, "setInPoint", inTicks, "QE in", "qe.");
+    }
+    if (!outApplied) {
+      outApplied = setPoint(qeSeq, "setOutPoint", outTicks, "QE out", "qe.");
+    }
+  }
+
+  return {
+    ok: inApplied && outApplied,
+    inApplied: inApplied,
+    outApplied: outApplied,
+    methods: methods,
+    errors: errors,
+    available: {
+      qeSetIn: !!(qeSeq && qeSeq.setInPoint),
+      qeSetOut: !!(qeSeq && qeSeq.setOutPoint),
+      domSetIn: !!(sequence && sequence.setInPoint),
+      domSetOut: !!(sequence && sequence.setOutPoint)
+    }
+  };
+};
+
+PremiereBridge._clipSelectionState = function (clip) {
+  if (!clip) {
+    return false;
+  }
+  try {
+    if (clip.isSelected) {
+      return !!clip.isSelected();
+    }
+  } catch (errIsSelected) {
+  }
+  try {
+    if (clip.getSelectionState) {
+      return !!clip.getSelectionState();
+    }
+  } catch (errGetSelection) {
+  }
+  try {
+    if (clip.selected !== undefined && clip.selected !== null) {
+      return !!clip.selected;
+    }
+  } catch (errSelected) {
+  }
+  return false;
+};
+
+PremiereBridge._selectedTrackItems = function (sequence) {
+  var selected = [];
+  if (!sequence) {
+    return selected;
+  }
+
+  function collect(kind, trackCollection) {
+    var trackCount = PremiereBridge._collectionCount(trackCollection, 64);
+    for (var t = 0; t < trackCount; t++) {
+      var track = null;
+      try {
+        track = trackCollection[t];
+      } catch (errTrackGet) {
+      }
+      if (!track || !track.clips) {
+        continue;
+      }
+      var clipCollection = track.clips;
+      var clipCount = PremiereBridge._collectionCount(clipCollection, 512);
+      for (var c = 0; c < clipCount; c++) {
+        var clip = null;
+        try {
+          clip = clipCollection[c];
+        } catch (errClipGet) {
+        }
+        if (!clip || !PremiereBridge._clipSelectionState(clip)) {
+          continue;
+        }
+        var startTicks = PremiereBridge._timeToTicks(clip.start);
+        var endTicks = PremiereBridge._timeToTicks(clip.end);
+        selected.push({
+          kind: kind,
+          trackIndex: t,
+          clipIndex: c,
+          name: clip.name ? String(clip.name) : null,
+          startTicks: startTicks !== null ? Math.round(Number(startTicks)) : null,
+          endTicks: endTicks !== null ? Math.round(Number(endTicks)) : null
+        });
+      }
+    }
+  }
+
+  collect("video", sequence.videoTracks);
+  collect("audio", sequence.audioTracks);
+  return selected;
+};
+
+PremiereBridge._selectionBounds = function (selectedItems) {
+  if (!selectedItems || !selectedItems.length) {
+    return null;
+  }
+  var minStart = null;
+  var maxEnd = null;
+  for (var i = 0; i < selectedItems.length; i++) {
+    var item = selectedItems[i];
+    if (!item) {
+      continue;
+    }
+    var startTicks = item.startTicks;
+    var endTicks = item.endTicks;
+    if (startTicks !== null && startTicks !== undefined && !isNaN(Number(startTicks))) {
+      if (minStart === null || startTicks < minStart) {
+        minStart = startTicks;
+      }
+    }
+    if (endTicks !== null && endTicks !== undefined && !isNaN(Number(endTicks))) {
+      if (maxEnd === null || endTicks > maxEnd) {
+        maxEnd = endTicks;
+      }
+    }
+  }
+  if (minStart === null || maxEnd === null) {
+    return null;
+  }
+  return {
+    inTicks: Math.round(Number(minStart)),
+    outTicks: Math.round(Number(maxEnd))
+  };
+};
+
+PremiereBridge._performExtractInOut = function (sequence, qeSeq, payload) {
+  var errors = [];
+  var available = {
+    domExtractInOut: !!(sequence && sequence.extractInOut),
+    domExtract: !!(sequence && sequence.extract),
+    domLiftInOut: !!(sequence && sequence.liftInOut),
+    domLift: !!(sequence && sequence.lift),
+    domRemoveInOut: !!(sequence && sequence.removeInOut),
+    qeExtractInOut: !!(qeSeq && qeSeq.extractInOut),
+    qeExtract: !!(qeSeq && qeSeq.extract),
+    qeLiftInOut: !!(qeSeq && qeSeq.liftInOut),
+    qeLift: !!(qeSeq && qeSeq.lift),
+    qeRemoveInOut: !!(qeSeq && qeSeq.removeInOut),
+    qeRippleDeleteInOut: !!(qeSeq && qeSeq.rippleDeleteInOut),
+    qeRippleDelete: !!(qeSeq && qeSeq.rippleDelete),
+    appExecuteCommand: !!(app && app.executeCommand)
+  };
+
+  function attemptCall(target, methodName, label, argSets) {
+    if (!target || !target[methodName]) {
+      return null;
+    }
+    var argsList = argSets && argSets.length ? argSets : [[]];
+    for (var i = 0; i < argsList.length; i++) {
+      var args = argsList[i];
+      try {
+        target[methodName].apply(target, args);
+        return label + "(" + (args.length ? args.join(",") : "") + ")";
+      } catch (errCall) {
+        errors.push(label + ": " + String(errCall));
+      }
+    }
+    return null;
+  }
+
+  var methodUsed = null;
+
+  methodUsed = attemptCall(sequence, "extractInOut", "dom.extractInOut");
+  if (!methodUsed) {
+    methodUsed = attemptCall(sequence, "extract", "dom.extractInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(sequence, "liftInOut", "dom.liftInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(sequence, "lift", "dom.liftInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(sequence, "removeInOut", "dom.removeInOut", [[1, 1], [1], []]);
+  }
+
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "extractInOut", "qe.extractInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "extract", "qe.extractInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "liftInOut", "qe.liftInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "lift", "qe.liftInOut");
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "removeInOut", "qe.removeInOut", [[1, 1], [1], []]);
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "rippleDeleteInOut", "qe.rippleDeleteInOut", [[1], []]);
+  }
+  if (!methodUsed) {
+    methodUsed = attemptCall(qeSeq, "rippleDelete", "qe.rippleDelete", [[1], []]);
+  }
+
+  if (!methodUsed && payload && payload.commandId !== undefined && payload.commandId !== null && app.executeCommand) {
+    var commandId = Number(payload.commandId);
+    if (!isNaN(commandId)) {
+      try {
+        app.executeCommand(commandId);
+        methodUsed = "app.executeCommand(" + commandId + ")";
+      } catch (errExec) {
+        errors.push("app.executeCommand: " + String(errExec));
+      }
+    }
+  }
+
+  return {
+    ok: !!methodUsed,
+    method: methodUsed,
+    errors: errors,
+    available: available
+  };
+};
+
 PremiereBridge._timecodeToTicks = function (timecode) {
   function parseTimecode(raw) {
     if (!raw) {
@@ -631,137 +974,173 @@ PremiereBridge.setInOutPoints = function (jsonStr) {
     if (!sequence) {
       return PremiereBridge._err("No active sequence");
     }
-
-    function ticksFrom(prefix) {
-      var ticksKey = prefix + "Ticks";
-      if (payload[ticksKey] !== undefined && payload[ticksKey] !== null) {
-        var ticksValue = Number(payload[ticksKey]);
-        if (!isNaN(ticksValue)) {
-          return ticksValue;
-        }
-      }
-
-      var timecodeKey = prefix + "Timecode";
-      if (payload[timecodeKey] !== undefined && payload[timecodeKey] !== null) {
-        var ticksFromTimecode = PremiereBridge._timecodeToTicks(String(payload[timecodeKey]));
-        if (ticksFromTimecode !== null && ticksFromTimecode !== undefined && !isNaN(Number(ticksFromTimecode))) {
-          return Number(ticksFromTimecode);
-        }
-      }
-
-      var secondsKey = prefix + "Seconds";
-      if (payload[secondsKey] !== undefined && payload[secondsKey] !== null) {
-        var secondsValue = Number(payload[secondsKey]);
-        if (!isNaN(secondsValue)) {
-          return Number(PremiereBridge._secondsToTicks(secondsValue));
-        }
-      }
-
-      if (payload[prefix] !== undefined && payload[prefix] !== null) {
-        var raw = payload[prefix];
-        var str = String(raw);
-        if (str.indexOf(":") !== -1 || str.indexOf(";") !== -1) {
-          var ticksFromRawTimecode = PremiereBridge._timecodeToTicks(str);
-          if (ticksFromRawTimecode !== null && ticksFromRawTimecode !== undefined && !isNaN(Number(ticksFromRawTimecode))) {
-            return Number(ticksFromRawTimecode);
-          }
-        }
-        var numericRaw = Number(raw);
-        if (!isNaN(numericRaw)) {
-          return Number(PremiereBridge._secondsToTicks(numericRaw));
-        }
-      }
-
-      return null;
-    }
-
-    var inTicks = ticksFrom("in");
-    var outTicks = ticksFrom("out");
-    if (inTicks === null || outTicks === null) {
-      return PremiereBridge._err("Missing or invalid in/out values", {
-        received: payload
-      });
-    }
-
-    inTicks = Math.round(Number(inTicks));
-    outTicks = Math.round(Number(outTicks));
-    if (isNaN(inTicks) || isNaN(outTicks)) {
-      return PremiereBridge._err("Failed to compute in/out ticks", { inTicks: inTicks, outTicks: outTicks });
-    }
-    if (outTicks < inTicks) {
-      return PremiereBridge._err("Out point must be after in point", { inTicks: inTicks, outTicks: outTicks });
-    }
-
-    var methods = [];
-    var errors = [];
-
-    function setPoint(target, setterName, ticksValue, label, methodPrefix) {
-      if (!target || !target[setterName]) {
-        return false;
-      }
-      var ticksString = String(ticksValue);
-      try {
-        target[setterName](ticksString);
-        methods.push(methodPrefix + setterName + "(string)");
-        return true;
-      } catch (errString) {
-        try {
-          target[setterName](ticksValue);
-          methods.push(methodPrefix + setterName + "(number)");
-          return true;
-        } catch (errNumber) {
-          try {
-            var t = new Time();
-            t.ticks = ticksString;
-            target[setterName](t);
-            methods.push(methodPrefix + setterName + "(Time)");
-            return true;
-          } catch (errTime) {
-            errors.push(label + ": " + String(errTime || errNumber || errString));
-          }
-        }
-      }
-      return false;
-    }
-
     var qeSeq = PremiereBridge._getQeSequence();
-    var inApplied = false;
-    var outApplied = false;
-
-    // Prefer DOM here; QE accepts different units in some contexts.
-    inApplied = setPoint(sequence, "setInPoint", inTicks, "DOM in", "dom.");
-    outApplied = setPoint(sequence, "setOutPoint", outTicks, "DOM out", "dom.");
-
-    if ((!inApplied || !outApplied) && qeSeq) {
-      if (!inApplied) {
-        inApplied = setPoint(qeSeq, "setInPoint", inTicks, "QE in", "qe.");
-      }
-      if (!outApplied) {
-        outApplied = setPoint(qeSeq, "setOutPoint", outTicks, "QE out", "qe.");
-      }
+    var computed = PremiereBridge._computeInOutTicks(payload);
+    if (!computed.ok) {
+      return PremiereBridge._err(computed.error, computed.data);
     }
 
-    if (!inApplied || !outApplied) {
+    var inTicks = computed.inTicks;
+    var outTicks = computed.outTicks;
+    var applied = PremiereBridge._setInOutTicks(sequence, qeSeq, inTicks, outTicks);
+    if (!applied.ok) {
       return PremiereBridge._err("Failed to set in/out points", {
-        inApplied: inApplied,
-        outApplied: outApplied,
+        inApplied: applied.inApplied,
+        outApplied: applied.outApplied,
         inTicks: String(inTicks),
         outTicks: String(outTicks),
-        methods: methods,
-        errors: errors,
-        available: {
-          qeSetIn: !!(qeSeq && qeSeq.setInPoint),
-          qeSetOut: !!(qeSeq && qeSeq.setOutPoint),
-          domSetIn: !!sequence.setInPoint,
-          domSetOut: !!sequence.setOutPoint
-        }
+        methods: applied.methods,
+        errors: applied.errors,
+        available: applied.available
       });
     }
 
     return PremiereBridge._ok({
       inTicks: String(inTicks),
       outTicks: String(outTicks),
-      methods: methods
+      methods: applied.methods
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.extractRange = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var computed = PremiereBridge._computeInOutTicks(payload);
+    if (!computed.ok) {
+      return PremiereBridge._err(computed.error, computed.data);
+    }
+
+    var inTicks = computed.inTicks;
+    var outTicks = computed.outTicks;
+    var setResult = PremiereBridge._setInOutTicks(sequence, qeSeq, inTicks, outTicks);
+    if (!setResult.ok) {
+      return PremiereBridge._err("Failed to set in/out points", {
+        inApplied: setResult.inApplied,
+        outApplied: setResult.outApplied,
+        inTicks: String(inTicks),
+        outTicks: String(outTicks),
+        methods: setResult.methods,
+        errors: setResult.errors,
+        available: setResult.available
+      });
+    }
+
+    var inTimecode = payload.inTimecode ? String(payload.inTimecode) : PremiereBridge._ticksToTimecode(inTicks);
+    var outTimecode = payload.outTimecode ? String(payload.outTimecode) : PremiereBridge._ticksToTimecode(outTicks);
+
+    function razorPayload(ticksValue, timecodeValue) {
+      if (timecodeValue) {
+        return { timecode: timecodeValue, unit: "timecode" };
+      }
+      return { ticks: ticksValue, unit: "ticks" };
+    }
+
+    var razorInRaw = PremiereBridge.razorAtTimecode(JSON.stringify(razorPayload(inTicks, inTimecode)));
+    var razorOutRaw = PremiereBridge.razorAtTimecode(JSON.stringify(razorPayload(outTicks, outTimecode)));
+    var razorIn = PremiereBridge._parse(razorInRaw);
+    var razorOut = PremiereBridge._parse(razorOutRaw);
+
+    var extractResult = PremiereBridge._performExtractInOut(sequence, qeSeq, payload);
+    if (!extractResult.ok) {
+      return PremiereBridge._err("Unable to extract in/out range", {
+        inTicks: String(inTicks),
+        outTicks: String(outTicks),
+        inTimecode: inTimecode,
+        outTimecode: outTimecode,
+        setInOut: setResult,
+        razor: {
+          inResult: razorIn,
+          outResult: razorOut
+        },
+        available: extractResult.available,
+        errors: extractResult.errors
+      });
+    }
+
+    return PremiereBridge._ok({
+      inTicks: String(inTicks),
+      outTicks: String(outTicks),
+      inTimecode: inTimecode,
+      outTimecode: outTimecode,
+      setInOut: {
+        methods: setResult.methods
+      },
+      razor: {
+        inResult: razorIn,
+        outResult: razorOut
+      },
+      extract: {
+        method: extractResult.method,
+        errors: extractResult.errors,
+        available: extractResult.available
+      }
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.rippleDeleteSelection = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var selectedItems = PremiereBridge._selectedTrackItems(sequence);
+    if (!selectedItems.length) {
+      return PremiereBridge._err("No selected track items found");
+    }
+    var bounds = PremiereBridge._selectionBounds(selectedItems);
+    if (!bounds) {
+      return PremiereBridge._err("Unable to compute selection bounds", {
+        selectionCount: selectedItems.length
+      });
+    }
+
+    var extractPayload = {
+      inTicks: bounds.inTicks,
+      outTicks: bounds.outTicks
+    };
+    if (payload.commandId !== undefined && payload.commandId !== null) {
+      extractPayload.commandId = payload.commandId;
+    }
+
+    var extractRaw = PremiereBridge.extractRange(JSON.stringify(extractPayload));
+    var extractResult = PremiereBridge._parse(extractRaw);
+    if (!extractResult || !extractResult.ok) {
+      return PremiereBridge._err("Failed to ripple delete selection", {
+        selectionCount: selectedItems.length,
+        bounds: bounds,
+        extractResult: extractResult
+      });
+    }
+
+    var sample = selectedItems.slice(0, 12);
+    return PremiereBridge._ok({
+      selectionCount: selectedItems.length,
+      selectionSample: sample,
+      bounds: {
+        inTicks: String(bounds.inTicks),
+        outTicks: String(bounds.outTicks),
+        inTimecode: PremiereBridge._ticksToTimecode(bounds.inTicks),
+        outTimecode: PremiereBridge._ticksToTimecode(bounds.outTicks)
+      },
+      extract: extractResult.data,
+      available: {
+        qeAvailable: !!qeSeq
+      }
     });
   } catch (err) {
     return PremiereBridge._err(String(err));

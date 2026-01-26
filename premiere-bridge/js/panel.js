@@ -179,6 +179,12 @@
     if (command === "setInOutPoints") {
       return evalExtendScript("setInOutPoints", payload || {});
     }
+    if (command === "extractRange") {
+      return evalExtendScript("extractRange", payload || {});
+    }
+    if (command === "rippleDeleteSelection") {
+      return evalExtendScript("rippleDeleteSelection", payload || {});
+    }
     if (command === "razorAtTimecode") {
       return evalExtendScript("razorAtTimecode", payload || {});
     }
