@@ -1089,19 +1089,42 @@ PremiereBridge._findQeSequenceById = function (id) {
   return null;
 };
 
-PremiereBridge._activateSequence = function (seq, qeSeq) {
+PremiereBridge._activateSequence = function (seq, qeSeq, project, errors) {
+  var proj = project || (app && app.project ? app.project : null);
+  try {
+    if (proj && proj.openSequence && seq) {
+      if (seq.sequenceID !== undefined && seq.sequenceID !== null) {
+        proj.openSequence(String(seq.sequenceID));
+        return "project.openSequence(sequenceID)";
+      }
+      if (seq.id !== undefined && seq.id !== null) {
+        proj.openSequence(String(seq.id));
+        return "project.openSequence(id)";
+      }
+    }
+  } catch (errProjectOpen) {
+    if (errors) {
+      errors.push("project.openSequence: " + String(errProjectOpen));
+    }
+  }
   try {
     if (seq && seq.projectItem && seq.projectItem.openInTimeline) {
       seq.projectItem.openInTimeline();
       return "projectItem.openInTimeline";
     }
   } catch (errDomOpen) {
+    if (errors) {
+      errors.push("projectItem.openInTimeline: " + String(errDomOpen));
+    }
   }
   try {
     if (seq && seq.projectItem && seq.projectItem.setSelected) {
       seq.projectItem.setSelected(1, 1);
     }
   } catch (errSelect) {
+    if (errors) {
+      errors.push("projectItem.setSelected: " + String(errSelect));
+    }
   }
   try {
     if (!qeSeq && seq && seq.name) {
@@ -1112,6 +1135,9 @@ PremiereBridge._activateSequence = function (seq, qeSeq) {
       return "qe.openInTimeline";
     }
   } catch (errQeOpen) {
+    if (errors) {
+      errors.push("qe.openInTimeline: " + String(errQeOpen));
+    }
   }
   try {
     if (qeSeq && qeSeq.setActive) {
@@ -1119,6 +1145,19 @@ PremiereBridge._activateSequence = function (seq, qeSeq) {
       return "qe.setActive";
     }
   } catch (errQeActive) {
+    if (errors) {
+      errors.push("qe.setActive: " + String(errQeActive));
+    }
+  }
+  try {
+    if (proj && seq) {
+      proj.activeSequence = seq;
+      return "project.activeSequence=seq";
+    }
+  } catch (errAssign) {
+    if (errors) {
+      errors.push("project.activeSequence assignment: " + String(errAssign));
+    }
   }
   return null;
 };
@@ -1213,6 +1252,7 @@ PremiereBridge.openSequence = function (jsonStr) {
     }
 
     var activeBefore = snapshotActive(project.activeSequence);
+    var errors = [];
 
     var qeSeq = null;
     if (chosen.id) {
@@ -1222,7 +1262,15 @@ PremiereBridge.openSequence = function (jsonStr) {
       qeSeq = PremiereBridge._findQeSequenceByName(chosen.name);
     }
 
-    var activateMethod = PremiereBridge._activateSequence(seqRef, qeSeq);
+    var availability = {
+      projectOpenSequence: !!(project && project.openSequence),
+      projectItemOpenInTimeline: !!(seqRef && seqRef.projectItem && seqRef.projectItem.openInTimeline),
+      projectItemSetSelected: !!(seqRef && seqRef.projectItem && seqRef.projectItem.setSelected),
+      qeOpenInTimeline: !!(qeSeq && qeSeq.openInTimeline),
+      qeSetActive: !!(qeSeq && qeSeq.setActive)
+    };
+
+    var activateMethod = PremiereBridge._activateSequence(seqRef, qeSeq, project, errors);
     var activeAfter = snapshotActive(project.activeSequence);
 
     var activated = false;
@@ -1240,6 +1288,8 @@ PremiereBridge.openSequence = function (jsonStr) {
       methods: {
         activate: activateMethod
       },
+      available: availability,
+      errors: errors,
       activeBefore: activeBefore,
       activeAfter: activeAfter
     });
@@ -1443,7 +1493,7 @@ PremiereBridge.duplicateSequence = function (jsonStr) {
     }
 
     var qeNewSeq = PremiereBridge._findQeSequenceByName(seqRef.name || desiredName);
-    var activateMethod = PremiereBridge._activateSequence(seqRef, qeNewSeq);
+    var activateMethod = PremiereBridge._activateSequence(seqRef, qeNewSeq, project, errors);
     var activated = activateMethod ? true : false;
 
     var seqId = null;
