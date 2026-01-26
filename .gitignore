@@ -12,6 +12,7 @@ yarn-error.log*
 
 *.tgz
 *.zip
+codex-premiere-bridge.skill
 
 dist/
 build/
