@@ -778,6 +778,16 @@ PremiereBridge._sequenceList = function () {
       return list;
     }
     var activeSeq = app.project.activeSequence;
+    var activeId = null;
+    var activeName = activeSeq && activeSeq.name ? String(activeSeq.name) : null;
+    try {
+      if (activeSeq && activeSeq.sequenceID !== undefined && activeSeq.sequenceID !== null) {
+        activeId = String(activeSeq.sequenceID);
+      } else if (activeSeq && activeSeq.id !== undefined && activeSeq.id !== null) {
+        activeId = String(activeSeq.id);
+      }
+    } catch (errActiveId) {
+    }
     var sequences = app.project.sequences;
     var count = 0;
     if (sequences.numSequences !== undefined && sequences.numSequences !== null) {
@@ -811,11 +821,22 @@ PremiereBridge._sequenceList = function () {
         }
       } catch (errProjectItem) {
       }
+      var isActive = false;
+      try {
+        if (activeSeq && seq === activeSeq) {
+          isActive = true;
+        } else if (activeId && seqId && String(seqId) === String(activeId)) {
+          isActive = true;
+        } else if (activeName && seq.name && String(seq.name) === String(activeName)) {
+          isActive = true;
+        }
+      } catch (errActive) {
+      }
       list.push({
         index: i,
         name: seq.name ? String(seq.name) : null,
         id: seqId,
-        active: !!(activeSeq && seq === activeSeq),
+        active: isActive,
         projectItemRef: projectItemRef,
         ref: seq
       });
