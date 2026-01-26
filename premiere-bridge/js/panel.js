@@ -176,6 +176,9 @@
     if (command === "setInOutPoints") {
       return evalExtendScript("setInOutPoints", payload || {});
     }
+    if (command === "razorAtTimecode") {
+      return evalExtendScript("razorAtTimecode", payload || {});
+    }
     if (command === "toggleVideoTrack") {
       return evalExtendScript("toggleVideoTrack", payload || {});
     }
