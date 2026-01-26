@@ -44,6 +44,7 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
 ./cli/premiere-bridge.js extract-range --in "00;00;10;00" --out "00;00;20;00"
 ./cli/premiere-bridge.js ripple-delete-selection
+./cli/premiere-bridge.js rough-cut --ranges-file ./ranges.json --name "Transcript Rough Cut"
 ./cli/premiere-bridge.js razor-cut --timecode "00;00;10;00"
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
@@ -85,6 +86,7 @@ Color indices:
 - `set-in-out`
 - `extract-range`
 - `ripple-delete-selection`
+- `rough-cut`
 - `razor-cut`
 - `add-markers`
 - `add-markers-file`
@@ -107,6 +109,35 @@ Suggested workflow for transcript ranges to keep:
 2) Use `sequence-inventory` to translate transcript timecodes into sequence time.
 3) Compute the gaps between "kept" ranges.
 4) Run `extract-range` on each gap from end to start.
+
+## Rough Cut Orchestration
+
+`rough-cut` automates the workflow above using inclusion ranges.
+
+Ranges JSON can be an array or an object with `ranges`/`segments`:
+
+```json
+{
+  "ranges": [
+    { "start": "00;00;02;00", "end": "00;00;06;00" },
+    { "start": "00;00;10;00", "end": "00;00;16;00" }
+  ]
+}
+```
+
+Example:
+
+```bash
+./cli/premiere-bridge.js rough-cut \
+  --ranges-file /Users/brents/code/codex-premiere/ranges.json \
+  --name "Rough Cut - Transcript" \
+  --padding-seconds 0.25
+```
+
+Notes:
+- The command duplicates the active sequence before editing.
+- By default, transcript times are offset by the sequence start time. Use `--no-offset` if your ranges are already in sequence time.
+- Gaps are processed from end to start to keep earlier times stable.
 
 ## Security
 
