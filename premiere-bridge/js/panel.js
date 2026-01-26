@@ -158,6 +158,9 @@
     if (command === "duplicateSequence") {
       return evalExtendScript("duplicateSequence", payload || {});
     }
+    if (command === "listSequences") {
+      return evalExtendScript("listSequences", payload || {});
+    }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }
