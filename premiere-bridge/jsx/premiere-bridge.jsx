@@ -975,8 +975,86 @@ PremiereBridge.duplicateSequence = function (jsonStr) {
 
     var qeSeq = PremiereBridge._getQeSequence();
     var duplicated = false;
+    var explicitNewRef = null;
 
-    if (qeSeq && qeSeq.duplicate) {
+    var availability = {
+      domClone: !!(active && active.clone),
+      domDuplicate: !!(active && active.duplicate),
+      projectItemDuplicate: !!(active && active.projectItem && active.projectItem.duplicate),
+      projectItemClone: !!(active && active.projectItem && active.projectItem.clone),
+      qeDuplicate: !!(qeSeq && qeSeq.duplicate),
+      qeClone: !!(qeSeq && qeSeq.clone)
+    };
+
+    if (availability.domClone && !duplicated) {
+      try {
+        explicitNewRef = active.clone(desiredName);
+        duplicated = true;
+        method = "dom.clone(name)";
+      } catch (errDomCloneNamed) {
+        errors.push(String(errDomCloneNamed));
+        try {
+          explicitNewRef = active.clone();
+          duplicated = true;
+          method = "dom.clone()";
+        } catch (errDomClonePlain) {
+          errors.push(String(errDomClonePlain));
+        }
+      }
+    }
+
+    if (availability.domDuplicate && !duplicated) {
+      try {
+        explicitNewRef = active.duplicate(desiredName);
+        duplicated = true;
+        method = "dom.duplicate(name)";
+      } catch (errDomDupNamed) {
+        errors.push(String(errDomDupNamed));
+        try {
+          explicitNewRef = active.duplicate();
+          duplicated = true;
+          method = "dom.duplicate()";
+        } catch (errDomDupPlain) {
+          errors.push(String(errDomDupPlain));
+        }
+      }
+    }
+
+    if (availability.projectItemDuplicate && !duplicated) {
+      try {
+        explicitNewRef = active.projectItem.duplicate(desiredName);
+        duplicated = true;
+        method = "projectItem.duplicate(name)";
+      } catch (errPiDupNamed) {
+        errors.push(String(errPiDupNamed));
+        try {
+          explicitNewRef = active.projectItem.duplicate();
+          duplicated = true;
+          method = "projectItem.duplicate()";
+        } catch (errPiDupPlain) {
+          errors.push(String(errPiDupPlain));
+        }
+      }
+    }
+
+    if (availability.projectItemClone && !duplicated) {
+      try {
+        explicitNewRef = active.projectItem.clone(desiredName);
+        duplicated = true;
+        method = "projectItem.clone(name)";
+      } catch (errPiCloneNamed) {
+        errors.push(String(errPiCloneNamed));
+        try {
+          explicitNewRef = active.projectItem.clone();
+          duplicated = true;
+          method = "projectItem.clone()";
+        } catch (errPiClonePlain) {
+          errors.push(String(errPiClonePlain));
+        }
+      }
+    }
+
+    if (availability.qeDuplicate && !duplicated) {
       try {
         qeSeq.duplicate(desiredName);
         duplicated = true;
@@ -993,18 +1071,52 @@ PremiereBridge.duplicateSequence = function (jsonStr) {
       }
     }
 
+    if (availability.qeClone && !duplicated) {
+      try {
+        qeSeq.clone(desiredName);
+        duplicated = true;
+        method = "qe.clone(name)";
+      } catch (errQeCloneNamed) {
+        errors.push(String(errQeCloneNamed));
+        try {
+          qeSeq.clone();
+          duplicated = true;
+          method = "qe.clone()";
+        } catch (errQeClonePlain) {
+          errors.push(String(errQeClonePlain));
+        }
+      }
+    }
+
     if (!duplicated) {
       return PremiereBridge._err("Unable to duplicate active sequence", {
         errors: errors,
-        available: {
-          qeDuplicate: !!(qeSeq && qeSeq.duplicate)
-        }
+        available: availability
       });
     }
 
     var afterList = PremiereBridge._sequenceList();
-    var newSequences = PremiereBridge._diffNewSequences(beforeList, afterList);
-    var newSeqInfo = newSequences.length ? newSequences[newSequences.length - 1] : null;
+    var newSeqInfo = null;
+
+    if (explicitNewRef && afterList && afterList.length) {
+      for (var k = 0; k < afterList.length; k++) {
+        if (!afterList[k]) {
+          continue;
+        }
+        if (afterList[k].ref === explicitNewRef) {
+          newSeqInfo = afterList[k];
+          break;
+        }
+        if (!newSeqInfo && explicitNewRef.name && afterList[k].name === String(explicitNewRef.name)) {
+          newSeqInfo = afterList[k];
+        }
+      }
+    }
+
+    if (!newSeqInfo) {
+      var newSequences = PremiereBridge._diffNewSequences(beforeList, afterList);
+      newSeqInfo = newSequences.length ? newSequences[newSequences.length - 1] : null;
+    }
     if (!newSeqInfo && afterList.length) {
       newSeqInfo = afterList[afterList.length - 1];
     }
@@ -1012,7 +1124,8 @@ PremiereBridge.duplicateSequence = function (jsonStr) {
       return PremiereBridge._err("Sequence duplicated but could not be located", {
         method: method,
         desiredName: desiredName,
-        errors: errors
+        errors: errors,
+        available: availability
       });
     }
 
