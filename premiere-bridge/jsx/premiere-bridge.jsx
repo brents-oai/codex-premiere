@@ -98,6 +98,138 @@ PremiereBridge._secondsToTicks = function (seconds) {
   return t.ticks;
 };
 
+PremiereBridge._timeToTicks = function (value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    if (value.ticks !== undefined && value.ticks !== null) {
+      var ticksFromObj = Number(value.ticks);
+      if (!isNaN(ticksFromObj)) {
+        return ticksFromObj;
+      }
+    }
+  } catch (errTicks) {
+  }
+  try {
+    if (value.seconds !== undefined && value.seconds !== null) {
+      var secondsFromObj = Number(value.seconds);
+      if (!isNaN(secondsFromObj)) {
+        return secondsFromObj * PremiereBridge.TICKS_PER_SECOND;
+      }
+    }
+  } catch (errSeconds) {
+  }
+  var numeric = Number(value);
+  if (!isNaN(numeric)) {
+    return numeric;
+  }
+  return null;
+};
+
+PremiereBridge._timeToSeconds = function (value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    if (value.seconds !== undefined && value.seconds !== null) {
+      var secondsFromObj = Number(value.seconds);
+      if (!isNaN(secondsFromObj)) {
+        return secondsFromObj;
+      }
+    }
+  } catch (errSeconds) {
+  }
+  var ticks = PremiereBridge._timeToTicks(value);
+  if (ticks === null) {
+    return null;
+  }
+  return Number(ticks) / PremiereBridge.TICKS_PER_SECOND;
+};
+
+PremiereBridge._collectionCount = function (collection, maxScan) {
+  if (!collection) {
+    return 0;
+  }
+  try {
+    if (collection.numItems !== undefined && collection.numItems !== null) {
+      var nItems = Number(collection.numItems);
+      if (!isNaN(nItems) && nItems >= 0) {
+        return nItems;
+      }
+    }
+  } catch (errNumItems) {
+  }
+  try {
+    if (collection.numTracks !== undefined && collection.numTracks !== null) {
+      var nTracks = Number(collection.numTracks);
+      if (!isNaN(nTracks) && nTracks >= 0) {
+        return nTracks;
+      }
+    }
+  } catch (errNumTracks) {
+  }
+  try {
+    if (collection.length !== undefined && collection.length !== null) {
+      var len = Number(collection.length);
+      if (!isNaN(len) && len >= 0) {
+        return len;
+      }
+    }
+  } catch (errLength) {
+  }
+  var scanLimit = maxScan || 256;
+  var count = 0;
+  for (var i = 0; i < scanLimit; i++) {
+    try {
+      if (collection[i]) {
+        count = i + 1;
+      }
+    } catch (errIndex) {
+      break;
+    }
+  }
+  return count;
+};
+
+PremiereBridge._ticksToTimecode = function (ticks) {
+  if (ticks === null || ticks === undefined) {
+    return null;
+  }
+  var qeSeq = PremiereBridge._getQeSequence();
+  if (qeSeq && qeSeq.ticksToTimecode) {
+    try {
+      return qeSeq.ticksToTimecode(String(Math.round(Number(ticks))));
+    } catch (errTicksString) {
+      try {
+        return qeSeq.ticksToTimecode(Number(ticks));
+      } catch (errTicksNumber) {
+      }
+    }
+  }
+  return null;
+};
+
+PremiereBridge._sequenceStartTicks = function (sequence, qeSeq) {
+  var startTicks = null;
+  try {
+    if (sequence && sequence.zeroPoint !== undefined && sequence.zeroPoint !== null) {
+      startTicks = PremiereBridge._timeToTicks(sequence.zeroPoint);
+    }
+  } catch (errZeroPoint) {
+  }
+  if (startTicks === null && qeSeq && qeSeq.getZeroPoint) {
+    try {
+      startTicks = PremiereBridge._timeToTicks(qeSeq.getZeroPoint());
+    } catch (errQeZero) {
+    }
+  }
+  if (startTicks === null || isNaN(Number(startTicks))) {
+    startTicks = 0;
+  }
+  return Math.round(Number(startTicks));
+};
+
 PremiereBridge._timecodeToTicks = function (timecode) {
   function parseTimecode(raw) {
     if (!raw) {
@@ -630,6 +762,169 @@ PremiereBridge.setInOutPoints = function (jsonStr) {
       inTicks: String(inTicks),
       outTicks: String(outTicks),
       methods: methods
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.sequenceInventory = function () {
+  try {
+    var sequence = app.project && app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var settings = null;
+    var settingsError = null;
+    if (sequence.getSettings) {
+      try {
+        settings = sequence.getSettings();
+      } catch (errSettings) {
+        settingsError = String(errSettings);
+      }
+    }
+
+    var timebase = PremiereBridge._getSequenceTimebase(sequence);
+    var nominalFps = PremiereBridge._getNominalFps(sequence, timebase);
+    var startTicks = PremiereBridge._sequenceStartTicks(sequence, qeSeq);
+    var startTimecode = PremiereBridge._ticksToTimecode(startTicks);
+    var dropFrame = null;
+    if (startTimecode && String(startTimecode).indexOf(";") !== -1) {
+      dropFrame = true;
+    } else if (startTimecode) {
+      dropFrame = false;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function clipName(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.name) {
+          return String(clip.name);
+        }
+      } catch (errClipName) {
+      }
+      try {
+        if (clip.projectItem && clip.projectItem.name) {
+          return String(clip.projectItem.name);
+        }
+      } catch (errProjectItemName) {
+      }
+      return null;
+    }
+
+    function clipSource(clip) {
+      var inTicks = null;
+      var outTicks = null;
+      try {
+        if (clip && clip.inPoint !== undefined && clip.inPoint !== null) {
+          inTicks = PremiereBridge._timeToTicks(clip.inPoint);
+        }
+      } catch (errInPoint) {
+      }
+      try {
+        if (clip && clip.outPoint !== undefined && clip.outPoint !== null) {
+          outTicks = PremiereBridge._timeToTicks(clip.outPoint);
+        }
+      } catch (errOutPoint) {
+      }
+      return {
+        inPoint: summarizeTicks(inTicks),
+        outPoint: summarizeTicks(outTicks)
+      };
+    }
+
+    function collectTracks(kind, trackCollection) {
+      var tracks = [];
+      var trackCount = PremiereBridge._collectionCount(trackCollection, 64);
+      for (var t = 0; t < trackCount; t++) {
+        var track = null;
+        try {
+          track = trackCollection[t];
+        } catch (errTrackGet) {
+        }
+        if (!track) {
+          continue;
+        }
+
+        var clips = [];
+        var clipCollection = track.clips;
+        var clipCount = PremiereBridge._collectionCount(clipCollection, 512);
+        for (var c = 0; c < clipCount; c++) {
+          var clip = null;
+          try {
+            clip = clipCollection[c];
+          } catch (errClipGet) {
+          }
+          if (!clip) {
+            continue;
+          }
+
+          var startTicksValue = PremiereBridge._timeToTicks(clip.start);
+          var endTicksValue = PremiereBridge._timeToTicks(clip.end);
+          var durationTicks = null;
+          if (startTicksValue !== null && endTicksValue !== null) {
+            durationTicks = Math.max(0, Math.round(endTicksValue - startTicksValue));
+          }
+
+          clips.push({
+            kind: kind,
+            trackIndex: t,
+            clipIndex: c,
+            name: clipName(clip),
+            nodeId: clip && clip.nodeId ? String(clip.nodeId) : null,
+            start: summarizeTicks(startTicksValue),
+            end: summarizeTicks(endTicksValue),
+            duration: summarizeTicks(durationTicks),
+            source: clipSource(clip)
+          });
+        }
+
+        tracks.push({
+          kind: kind,
+          trackIndex: t,
+          name: track.name ? String(track.name) : null,
+          clipCount: clips.length,
+          clips: clips
+        });
+      }
+      return tracks;
+    }
+
+    var videoTracks = collectTracks("video", sequence.videoTracks);
+    var audioTracks = collectTracks("audio", sequence.audioTracks);
+
+    return PremiereBridge._ok({
+      sequence: {
+        name: sequence.name ? String(sequence.name) : null,
+        id: sequence.sequenceID ? String(sequence.sequenceID) : null,
+        timebase: timebase ? String(timebase) : sequence.timebase ? String(sequence.timebase) : null,
+        nominalFps: nominalFps,
+        dropFrame: dropFrame,
+        start: summarizeTicks(startTicks),
+        startTimecode: startTimecode,
+        settings: settings,
+        settingsError: settingsError
+      },
+      tracks: {
+        video: videoTracks,
+        audio: audioTracks
+      }
     });
   } catch (err) {
     return PremiereBridge._err(String(err));

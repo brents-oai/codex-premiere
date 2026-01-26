@@ -38,6 +38,7 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js list-sequences
 ./cli/premiere-bridge.js open-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js sequence-info
+./cli/premiere-bridge.js sequence-inventory
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
 ./cli/premiere-bridge.js set-playhead --timecode 00;00;10;00
 ./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
@@ -76,6 +77,7 @@ Color indices:
 - `list-sequences`
 - `open-sequence`
 - `sequence-info`
+- `sequence-inventory`
 - `debug-timecode`
 - `set-playhead`
 - `set-in-out`

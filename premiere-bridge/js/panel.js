@@ -167,6 +167,9 @@
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }
+    if (command === "sequenceInventory") {
+      return evalExtendScript("sequenceInventory", {});
+    }
     if (command === "debugTimecode") {
       return evalExtendScript("debugTimecode", payload || {});
     }

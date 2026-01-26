@@ -16,6 +16,7 @@ Usage:
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
+  premiere-bridge sequence-inventory [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
   premiere-bridge set-in-out --in 00;00;10;00 --out 00;00;20;00 [--port N] [--token TOKEN]
@@ -228,6 +229,12 @@ async function main() {
 
   if (command === "sequence-info") {
     const result = await sendCommand(config, "getSequenceInfo", {});
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "sequence-inventory") {
+    const result = await sendCommand(config, "sequenceInventory", {});
     console.log(JSON.stringify(result, null, 2));
     return;
   }
