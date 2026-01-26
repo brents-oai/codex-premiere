@@ -161,6 +161,9 @@
     if (command === "listSequences") {
       return evalExtendScript("listSequences", payload || {});
     }
+    if (command === "openSequence") {
+      return evalExtendScript("openSequence", payload || {});
+    }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }
