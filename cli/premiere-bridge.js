@@ -20,6 +20,8 @@ Usage:
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
   premiere-bridge set-in-out --in 00;00;10;00 --out 00;00;20;00 [--port N] [--token TOKEN]
+  premiere-bridge extract-range (--in 00;00;10;00 | --in-ticks N | --in-seconds S) (--out 00;00;20;00 | --out-ticks N | --out-seconds S) [--command-id N] [--port N] [--token TOKEN]
+  premiere-bridge ripple-delete-selection [--command-id N] [--port N] [--token TOKEN]
   premiere-bridge razor-cut (--timecode 00;00;10;00 | --seconds 10 | --ticks 254016000000) [--unit ticks|seconds|timecode|playhead] [--port N] [--token TOKEN]
   premiere-bridge add-markers --file markers.json [--port N] [--token TOKEN]
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
@@ -265,6 +267,57 @@ async function main() {
       inTimecode: args.in,
       outTimecode: args.out
     });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "extract-range") {
+    const payload = {};
+    if (args.in !== undefined) {
+      payload.inTimecode = String(args.in);
+    }
+    if (args["in-ticks"] !== undefined) {
+      payload.inTicks = Number(args["in-ticks"]);
+    }
+    if (args["in-seconds"] !== undefined) {
+      payload.inSeconds = Number(args["in-seconds"]);
+    }
+    if (args.out !== undefined) {
+      payload.outTimecode = String(args.out);
+    }
+    if (args["out-ticks"] !== undefined) {
+      payload.outTicks = Number(args["out-ticks"]);
+    }
+    if (args["out-seconds"] !== undefined) {
+      payload.outSeconds = Number(args["out-seconds"]);
+    }
+    if (args["command-id"] !== undefined) {
+      payload.commandId = Number(args["command-id"]);
+    }
+
+    const hasIn =
+      payload.inTimecode !== undefined ||
+      payload.inTicks !== undefined ||
+      payload.inSeconds !== undefined;
+    const hasOut =
+      payload.outTimecode !== undefined ||
+      payload.outTicks !== undefined ||
+      payload.outSeconds !== undefined;
+    if (!hasIn || !hasOut) {
+      throw new Error("Provide in/out via --in/--out, --in-ticks/--out-ticks, or --in-seconds/--out-seconds");
+    }
+
+    const result = await sendCommand(config, "extractRange", payload);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "ripple-delete-selection") {
+    const payload = {};
+    if (args["command-id"] !== undefined) {
+      payload.commandId = Number(args["command-id"]);
+    }
+    const result = await sendCommand(config, "rippleDeleteSelection", payload);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
