@@ -259,6 +259,9 @@
     if (command === "openSequence") {
       return evalExtendScript("openSequence", cleanPayload);
     }
+    if (command === "findMenuCommandId") {
+      return evalExtendScript("findMenuCommandId", cleanPayload);
+    }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
     }
