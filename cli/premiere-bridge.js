@@ -16,6 +16,7 @@ Usage:
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
+  premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge sequence-inventory [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
@@ -267,6 +268,26 @@ function secondsToTicks(seconds) {
   return Math.round(value * TICKS_PER_SECOND);
 }
 
+function secondsToFrameTicks(seconds, context, mode) {
+  const value = Number(seconds);
+  if (Number.isNaN(value)) {
+    return null;
+  }
+  if (!context || !context.timebase || !context.fps) {
+    return secondsToTicks(value);
+  }
+  const framesFloat = value * context.fps;
+  let frames;
+  if (mode === "ceil") {
+    frames = Math.ceil(framesFloat - 1e-9);
+  } else if (mode === "floor") {
+    frames = Math.floor(framesFloat + 1e-9);
+  } else {
+    frames = Math.round(framesFloat);
+  }
+  return Math.max(0, Math.round(frames * context.timebase));
+}
+
 function ticksToSeconds(ticks) {
   return Number(ticks) / TICKS_PER_SECOND;
 }
@@ -274,7 +295,7 @@ function ticksToSeconds(ticks) {
 function paddingToTicks(args, context) {
   let paddingTicks = 0;
   if (args["padding-seconds"] !== undefined) {
-    const ticks = secondsToTicks(args["padding-seconds"]);
+    const ticks = secondsToFrameTicks(args["padding-seconds"], context, "round");
     if (ticks !== null) {
       paddingTicks += ticks;
     }
@@ -294,12 +315,16 @@ function paddingToTicks(args, context) {
   return Math.max(0, Math.round(paddingTicks));
 }
 
-function rangeField(value, context) {
+function rangeField(value, context, endpoint) {
   if (value === undefined || value === null) {
     return null;
   }
+  const mode = endpoint === "end" ? "ceil" : "floor";
   if (typeof value === "number") {
-    return secondsToTicks(value);
+    if (isProbablyTicks(value)) {
+      return Math.round(value);
+    }
+    return secondsToFrameTicks(value, context, mode);
   }
   const str = String(value);
   if (str.includes(":") || str.includes(";")) {
@@ -307,9 +332,23 @@ function rangeField(value, context) {
   }
   const numeric = Number(value);
   if (!Number.isNaN(numeric)) {
-    return secondsToTicks(numeric);
+    if (isProbablyTicks(numeric)) {
+      return Math.round(numeric);
+    }
+    return secondsToFrameTicks(numeric, context, mode);
   }
   return null;
+}
+
+function isProbablyTicks(value) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  const n = Number(value);
+  if (Number.isNaN(n)) {
+    return false;
+  }
+  return Math.abs(n) > TICKS_PER_SECOND;
 }
 
 function numericOrNull(value) {
@@ -324,22 +363,22 @@ function rangeToTicks(range, context) {
   const startTicksRaw =
     numericOrNull(range.startTicks) ??
     numericOrNull(range.inTicks) ??
-    (range.startSeconds !== undefined ? secondsToTicks(range.startSeconds) : null) ??
-    (range.inSeconds !== undefined ? secondsToTicks(range.inSeconds) : null) ??
+    (range.startSeconds !== undefined ? secondsToFrameTicks(range.startSeconds, context, "floor") : null) ??
+    (range.inSeconds !== undefined ? secondsToFrameTicks(range.inSeconds, context, "floor") : null) ??
     (range.startTimecode !== undefined ? timecodeToTicks(range.startTimecode, context) : null) ??
     (range.inTimecode !== undefined ? timecodeToTicks(range.inTimecode, context) : null) ??
-    rangeField(range.start, context) ??
-    rangeField(range.in, context);
+    rangeField(range.start, context, "start") ??
+    rangeField(range.in, context, "start");
 
   const endTicksRaw =
     numericOrNull(range.endTicks) ??
     numericOrNull(range.outTicks) ??
-    (range.endSeconds !== undefined ? secondsToTicks(range.endSeconds) : null) ??
-    (range.outSeconds !== undefined ? secondsToTicks(range.outSeconds) : null) ??
+    (range.endSeconds !== undefined ? secondsToFrameTicks(range.endSeconds, context, "ceil") : null) ??
+    (range.outSeconds !== undefined ? secondsToFrameTicks(range.outSeconds, context, "ceil") : null) ??
     (range.endTimecode !== undefined ? timecodeToTicks(range.endTimecode, context) : null) ??
     (range.outTimecode !== undefined ? timecodeToTicks(range.outTimecode, context) : null) ??
-    rangeField(range.end, context) ??
-    rangeField(range.out, context);
+    rangeField(range.end, context, "end") ??
+    rangeField(range.out, context, "end");
 
   if (startTicksRaw === null || endTicksRaw === null) {
     return null;
@@ -370,6 +409,7 @@ function clampRange(range, bounds) {
 
 function normalizeIncludedRanges(ranges, context, bounds, paddingTicks) {
   const normalized = [];
+  const frameTicks = Math.max(1, Math.round(context.timebase));
   for (const [index, range] of ranges.entries()) {
     const converted = rangeToTicks(range || {}, context);
     if (!converted) {
@@ -379,6 +419,12 @@ function normalizeIncludedRanges(ranges, context, bounds, paddingTicks) {
     let endTicks = converted.endTicks + paddingTicks;
     if (endTicks < startTicks) {
       [startTicks, endTicks] = [endTicks, startTicks];
+    }
+    // Align to frame boundaries to avoid off-by-one gaps on fractional seconds.
+    startTicks = Math.floor(startTicks / frameTicks) * frameTicks;
+    endTicks = Math.ceil(endTicks / frameTicks) * frameTicks;
+    if (endTicks <= startTicks) {
+      endTicks = startTicks + frameTicks;
     }
     const clamped = clampRange({ startTicks, endTicks }, bounds);
     if (clamped) {
@@ -509,6 +555,24 @@ async function main() {
       payload.id = String(args.id);
     }
     const result = await sendCommand(config, "openSequence", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "menu-command-id") {
+    let names = [];
+    if (args.names) {
+      const parsed = JSON.parse(String(args.names));
+      if (!Array.isArray(parsed)) {
+        throw new Error("--names must be a JSON array of menu names");
+      }
+      names = parsed.map((n) => String(n));
+    } else if (args.name) {
+      names = [String(args.name)];
+    } else {
+      throw new Error("Provide --name or --names for menu-command-id");
+    }
+    const result = await sendCommand(config, "findMenuCommandId", { names });
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -683,10 +747,14 @@ async function main() {
     const processed = [];
     for (const gap of gaps.slice().sort((a, b) => b.startTicks - a.startTicks)) {
       const gapDurationSeconds = ticksToSeconds(gap.endTicks - gap.startTicks);
+      const extractInTicks = gap.startTicks;
+      const extractOutTicks = gap.endTicks;
       if (dryRun) {
         processed.push({
           gap,
           seconds: gapDurationSeconds,
+          extractInTicks: String(extractInTicks),
+          extractOutTicks: String(extractOutTicks),
           method: "dryRun",
           skipped: true
         });
@@ -697,8 +765,8 @@ async function main() {
         "extractRange",
         attachDryRun(
           {
-            inTicks: gap.startTicks,
-            outTicks: gap.endTicks
+            inTicks: extractInTicks,
+            outTicks: extractOutTicks
           },
           dryRun
         )
@@ -709,6 +777,8 @@ async function main() {
       processed.push({
         gap,
         seconds: gapDurationSeconds,
+        extractInTicks: String(extractInTicks),
+        extractOutTicks: String(extractOutTicks),
         method: extractResult.body.data && extractResult.body.data.extract && extractResult.body.data.extract.method
       });
     }
@@ -739,7 +809,9 @@ async function main() {
       gapsPlanned: gaps.map((gap) => ({
         startTicks: String(gap.startTicks),
         endTicks: String(gap.endTicks),
-        durationSeconds: ticksToSeconds(gap.endTicks - gap.startTicks)
+        durationSeconds: ticksToSeconds(gap.endTicks - gap.startTicks),
+        extractInTicks: String(gap.startTicks),
+        extractOutTicks: String(gap.endTicks)
       })),
       gapsProcessed: processed,
       saveProject: saveResult.body

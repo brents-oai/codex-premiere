@@ -36,6 +36,60 @@ PremiereBridge._getQeSequence = function () {
   return null;
 };
 
+PremiereBridge.findMenuCommandId = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    if (!app || !app.findMenuCommandId) {
+      return PremiereBridge._err("app.findMenuCommandId is unavailable", {
+        available: {
+          appFindMenuCommandId: !!(app && app.findMenuCommandId),
+          appExecuteCommand: !!(app && app.executeCommand)
+        }
+      });
+    }
+
+    var names = [];
+    if (payload.names && payload.names.length) {
+      for (var i = 0; i < payload.names.length; i++) {
+        names.push(String(payload.names[i]));
+      }
+    } else if (payload.name) {
+      names = [String(payload.name)];
+    }
+    if (!names.length) {
+      return PremiereBridge._err("Provide a name or names array");
+    }
+
+    var results = [];
+    for (var j = 0; j < names.length; j++) {
+      var name = names[j];
+      var id = null;
+      var errMsg = null;
+      try {
+        id = Number(app.findMenuCommandId(name));
+      } catch (errFind) {
+        errMsg = String(errFind);
+      }
+      results.push({
+        name: name,
+        id: id,
+        ok: !errMsg && !isNaN(id) && id > 0,
+        error: errMsg
+      });
+    }
+
+    return PremiereBridge._ok({
+      results: results,
+      available: {
+        appFindMenuCommandId: !!(app && app.findMenuCommandId),
+        appExecuteCommand: !!(app && app.executeCommand)
+      }
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.TICKS_PER_SECOND = 254016000000;
 
 PremiereBridge._getSequenceTimebase = function (seq) {
@@ -495,7 +549,8 @@ PremiereBridge._performExtractInOut = function (sequence, qeSeq, payload) {
     qeRemoveInOut: !!(qeSeq && qeSeq.removeInOut),
     qeRippleDeleteInOut: !!(qeSeq && qeSeq.rippleDeleteInOut),
     qeRippleDelete: !!(qeSeq && qeSeq.rippleDelete),
-    appExecuteCommand: !!(app && app.executeCommand)
+    appExecuteCommand: !!(app && app.executeCommand),
+    appFindMenuCommandId: !!(app && app.findMenuCommandId)
   };
 
   function attemptCall(target, methodName, label, argSets) {
@@ -515,9 +570,37 @@ PremiereBridge._performExtractInOut = function (sequence, qeSeq, payload) {
     return null;
   }
 
+  function attemptMenuCommand(menuName) {
+    if (!app || !app.findMenuCommandId || !app.executeCommand) {
+      return null;
+    }
+    var id = -1;
+    try {
+      id = Number(app.findMenuCommandId(menuName));
+    } catch (errFind) {
+      errors.push("app.findMenuCommandId(" + menuName + "): " + String(errFind));
+      return null;
+    }
+    if (isNaN(id) || id <= 0) {
+      errors.push("app.findMenuCommandId(" + menuName + "): " + String(id));
+      return null;
+    }
+    try {
+      app.executeCommand(id);
+      return "app.executeCommand(" + menuName + ":" + id + ")";
+    } catch (errExec) {
+      errors.push("app.executeCommand(" + menuName + ":" + id + "): " + String(errExec));
+      return null;
+    }
+  }
+
   var methodUsed = null;
 
-  methodUsed = attemptCall(sequence, "extractInOut", "dom.extractInOut");
+  // Prefer the UI command when available; it tends to match Premiere's semantics.
+  methodUsed = attemptMenuCommand("Extract");
+  if (!methodUsed) {
+    methodUsed = attemptCall(sequence, "extractInOut", "dom.extractInOut");
+  }
   if (!methodUsed) {
     methodUsed = attemptCall(sequence, "extract", "dom.extractInOut");
   }
