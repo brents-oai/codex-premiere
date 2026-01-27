@@ -138,6 +138,7 @@ pre {
   border-radius: 6px;
   height: 140px;
   overflow: auto;
+  white-space: pre;
   font-size: 11px;
   color: #c7d0d9;
 }

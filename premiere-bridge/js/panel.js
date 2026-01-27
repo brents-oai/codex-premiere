@@ -21,13 +21,54 @@
   let crypto;
 
   const DEFAULT_PORT = 17321;
+  const MAX_LOG_LINES = 400;
   let server = null;
   let config = null;
+  let logLines = [];
 
   function log(message) {
     const time = new Date().toISOString().replace("T", " ").replace("Z", "");
-    logEl.textContent += `[${time}] ${message}\n`;
+    const line = `[${time}] ${message}`;
+    logLines.push(line);
+    if (logLines.length > MAX_LOG_LINES) {
+      logLines = logLines.slice(logLines.length - MAX_LOG_LINES);
+    }
+    logEl.textContent = `${logLines.join("\n")}\n`;
     logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function formatForLog(value, maxLen) {
+    const limit = maxLen || 240;
+    if (value === undefined) {
+      return "";
+    }
+    let text;
+    try {
+      text = typeof value === "string" ? value : JSON.stringify(value);
+    } catch (err) {
+      text = String(value);
+    }
+    if (!text) {
+      return "";
+    }
+    if (text.length > limit) {
+      return `${text.slice(0, limit)}…`;
+    }
+    return text;
+  }
+
+  function summarizeResult(result) {
+    if (!result || typeof result !== "object") {
+      return formatForLog(result, 160);
+    }
+    if (!result.ok) {
+      return `error=${result.error || "unknown"}`;
+    }
+    if (!result.data || typeof result.data !== "object") {
+      return "ok";
+    }
+    const keys = Object.keys(result.data).slice(0, 6);
+    return keys.length ? `ok dataKeys=${keys.join(",")}` : "ok";
   }
 
   function setStatus(isOnline) {
@@ -223,6 +264,7 @@
 
       const token = req.headers["x-auth-token"];
       if (!token || token !== config.token) {
+        log(`Unauthorized request from ${req.socket && req.socket.remoteAddress ? req.socket.remoteAddress : "unknown"}`);
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
         return;
@@ -231,10 +273,17 @@
       try {
         const raw = await readRequestBody(req);
         const payload = JSON.parse(raw || "{}");
-        const result = await handleCommand(payload.cmd, payload.payload);
+        const cmd = payload.cmd ? String(payload.cmd) : "unknown";
+        const cmdPayload = payload.payload || {};
+        const startTime = Date.now();
+        log(`Command ${cmd} <= ${formatForLog(cmdPayload, 200)}`);
+        const result = await handleCommand(cmd, cmdPayload);
+        const durationMs = Date.now() - startTime;
+        log(`Command ${cmd} => ${summarizeResult(result)} (${durationMs}ms)`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
       } catch (err) {
+        log(`Request error: ${err.message}`);
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: err.message }));
       }
