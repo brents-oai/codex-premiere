@@ -167,43 +167,97 @@
     });
   }
 
+  const MUTATING_COMMANDS = new Set([
+    "reloadProject",
+    "saveProject",
+    "duplicateSequence",
+    "openSequence",
+    "addMarkers",
+    "addMarkersFromFile",
+    "setPlayheadTimecode",
+    "setInOutPoints",
+    "extractRange",
+    "rippleDeleteSelection",
+    "razorAtTimecode",
+    "toggleVideoTrack"
+  ]);
+
+  function splitDryRunPayload(payload) {
+    const base = payload && typeof payload === "object" ? payload : {};
+    const dryRun = base.__dryRun === true;
+    if (!dryRun) {
+      return { dryRun: false, cleanPayload: base };
+    }
+    const cleanPayload = Object.assign({}, base);
+    delete cleanPayload.__dryRun;
+    return { dryRun: true, cleanPayload };
+  }
+
   async function handleCommand(command, payload) {
+    const { dryRun, cleanPayload } = splitDryRunPayload(payload);
     if (command === "ping") {
       return { ok: true, data: { status: "ok" } };
     }
     if (command === "addMarkers") {
-      return evalExtendScript("addMarkersFromJSON", payload || {});
+      const markers = cleanPayload.markers;
+      if (!Array.isArray(markers) || !markers.length) {
+        return { ok: false, error: "Markers array is required" };
+      }
+      if (dryRun) {
+        return {
+          ok: true,
+          data: { dryRun: true, skipped: true, markersCount: markers.length }
+        };
+      }
+      return evalExtendScript("addMarkersFromJSON", { markers });
     }
     if (command === "addMarkersFromFile") {
-      if (!payload || !payload.filePath) {
+      if (!cleanPayload.filePath) {
         return { ok: false, error: "Missing filePath" };
       }
       try {
-        const raw = fs.readFileSync(payload.filePath, "utf8");
+        const raw = fs.readFileSync(cleanPayload.filePath, "utf8");
         const parsed = JSON.parse(raw);
         const markers = Array.isArray(parsed) ? parsed : parsed.markers;
         if (!markers || !markers.length) {
           return { ok: false, error: "No markers found in file" };
+        }
+        if (dryRun) {
+          return {
+            ok: true,
+            data: {
+              dryRun: true,
+              skipped: true,
+              filePath: cleanPayload.filePath,
+              markersCount: markers.length
+            }
+          };
         }
         return evalExtendScript("addMarkersFromJSON", { markers });
       } catch (err) {
         return { ok: false, error: `Failed to read marker file: ${err.message}` };
       }
     }
+    if (dryRun && MUTATING_COMMANDS.has(command)) {
+      return {
+        ok: true,
+        data: { dryRun: true, skipped: true, command, payload: cleanPayload }
+      };
+    }
     if (command === "reloadProject") {
       return evalExtendScript("reloadProject", {});
     }
     if (command === "saveProject") {
-      return evalExtendScript("saveProject", payload || {});
+      return evalExtendScript("saveProject", cleanPayload);
     }
     if (command === "duplicateSequence") {
-      return evalExtendScript("duplicateSequence", payload || {});
+      return evalExtendScript("duplicateSequence", cleanPayload);
     }
     if (command === "listSequences") {
-      return evalExtendScript("listSequences", payload || {});
+      return evalExtendScript("listSequences", cleanPayload);
     }
     if (command === "openSequence") {
-      return evalExtendScript("openSequence", payload || {});
+      return evalExtendScript("openSequence", cleanPayload);
     }
     if (command === "getSequenceInfo") {
       return evalExtendScript("getSequenceInfo", {});
@@ -212,25 +266,25 @@
       return evalExtendScript("sequenceInventory", {});
     }
     if (command === "debugTimecode") {
-      return evalExtendScript("debugTimecode", payload || {});
+      return evalExtendScript("debugTimecode", cleanPayload);
     }
     if (command === "setPlayheadTimecode") {
-      return evalExtendScript("setPlayheadTimecode", payload || {});
+      return evalExtendScript("setPlayheadTimecode", cleanPayload);
     }
     if (command === "setInOutPoints") {
-      return evalExtendScript("setInOutPoints", payload || {});
+      return evalExtendScript("setInOutPoints", cleanPayload);
     }
     if (command === "extractRange") {
-      return evalExtendScript("extractRange", payload || {});
+      return evalExtendScript("extractRange", cleanPayload);
     }
     if (command === "rippleDeleteSelection") {
-      return evalExtendScript("rippleDeleteSelection", payload || {});
+      return evalExtendScript("rippleDeleteSelection", cleanPayload);
     }
     if (command === "razorAtTimecode") {
-      return evalExtendScript("razorAtTimecode", payload || {});
+      return evalExtendScript("razorAtTimecode", cleanPayload);
     }
     if (command === "toggleVideoTrack") {
-      return evalExtendScript("toggleVideoTrack", payload || {});
+      return evalExtendScript("toggleVideoTrack", cleanPayload);
     }
     return { ok: false, error: `Unknown command: ${command}` };
   }

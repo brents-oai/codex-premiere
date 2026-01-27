@@ -32,6 +32,9 @@ Usage:
 
 Config:
   Reads ~/Library/Application Support/PremiereBridge/config.json when available.
+
+Global:
+  --dry-run  Validate and compute without writing changes to Premiere.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -63,6 +66,18 @@ function parseArgs(argv) {
   return args;
 }
 
+function flagEnabled(args, key) {
+  const raw = args[key];
+  if (raw === undefined) {
+    return false;
+  }
+  if (raw === true) {
+    return true;
+  }
+  const normalized = String(raw).toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function loadConfig(options) {
   const configPaths = [
     path.join(os.homedir(), "Library", "Application Support", "PremiereBridge", "config.json"),
@@ -91,6 +106,14 @@ function loadConfig(options) {
   }
 
   return config;
+}
+
+function attachDryRun(payload, dryRun) {
+  const base = payload && typeof payload === "object" ? payload : {};
+  if (!dryRun) {
+    return base;
+  }
+  return Object.assign({}, base, { __dryRun: true });
 }
 
 function normalizeMarkers(input) {
@@ -438,6 +461,7 @@ async function main() {
     console.error("Missing token. Open the panel to generate one or pass --token.");
     process.exit(1);
   }
+  const dryRun = flagEnabled(args, "dry-run");
 
   if (command === "ping") {
     const result = await sendCommand(config, "ping", {});
@@ -446,13 +470,13 @@ async function main() {
   }
 
   if (command === "reload-project") {
-    const result = await sendCommand(config, "reloadProject", {});
+    const result = await sendCommand(config, "reloadProject", attachDryRun({}, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "save-project") {
-    const result = await sendCommand(config, "saveProject", {});
+    const result = await sendCommand(config, "saveProject", attachDryRun({}, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -462,7 +486,7 @@ async function main() {
     if (args.name) {
       payload.name = String(args.name);
     }
-    const result = await sendCommand(config, "duplicateSequence", payload);
+    const result = await sendCommand(config, "duplicateSequence", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -484,14 +508,14 @@ async function main() {
     if (args.id) {
       payload.id = String(args.id);
     }
-    const result = await sendCommand(config, "openSequence", payload);
+    const result = await sendCommand(config, "openSequence", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "add-markers") {
     const markers = readMarkers(args);
-    const result = await sendCommand(config, "addMarkers", { markers });
+    const result = await sendCommand(config, "addMarkers", attachDryRun({ markers }, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -521,7 +545,11 @@ async function main() {
     if (!args.timecode) {
       throw new Error("Provide --timecode for set-playhead");
     }
-    const result = await sendCommand(config, "setPlayheadTimecode", { timecode: args.timecode });
+    const result = await sendCommand(
+      config,
+      "setPlayheadTimecode",
+      attachDryRun({ timecode: args.timecode }, dryRun)
+    );
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -530,10 +558,17 @@ async function main() {
     if (!args.in || !args.out) {
       throw new Error("Provide --in and --out timecodes for set-in-out");
     }
-    const result = await sendCommand(config, "setInOutPoints", {
-      inTimecode: args.in,
-      outTimecode: args.out
-    });
+    const result = await sendCommand(
+      config,
+      "setInOutPoints",
+      attachDryRun(
+        {
+          inTimecode: args.in,
+          outTimecode: args.out
+        },
+        dryRun
+      )
+    );
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -574,7 +609,7 @@ async function main() {
       throw new Error("Provide in/out via --in/--out, --in-ticks/--out-ticks, or --in-seconds/--out-seconds");
     }
 
-    const result = await sendCommand(config, "extractRange", payload);
+    const result = await sendCommand(config, "extractRange", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -584,7 +619,7 @@ async function main() {
     if (args["command-id"] !== undefined) {
       payload.commandId = Number(args["command-id"]);
     }
-    const result = await sendCommand(config, "rippleDeleteSelection", payload);
+    const result = await sendCommand(config, "rippleDeleteSelection", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -595,19 +630,35 @@ async function main() {
       throw new Error("No ranges provided");
     }
 
-    const activeInfo = await sendCommand(config, "getSequenceInfo", {});
+    const activeInfo = await sendCommand(config, "getSequenceInfo", attachDryRun({}, dryRun));
     if (!activeInfo.body || !activeInfo.body.ok) {
       throw new Error(`Failed to read active sequence: ${activeInfo.body && activeInfo.body.error}`);
     }
     const activeName = String(activeInfo.body.data && activeInfo.body.data.name ? activeInfo.body.data.name : "Sequence");
     const duplicateName = args.name ? String(args.name) : `${activeName} Rough Cut`;
 
-    const dupResult = await sendCommand(config, "duplicateSequence", { name: duplicateName });
-    if (!dupResult.body || !dupResult.body.ok) {
-      throw new Error(`Failed to duplicate sequence: ${dupResult.body && dupResult.body.error}`);
+    let dupResult;
+    if (dryRun) {
+      dupResult = {
+        statusCode: 200,
+        body: {
+          ok: true,
+          data: {
+            dryRun: true,
+            skipped: true,
+            name: duplicateName,
+            sourceSequence: activeName
+          }
+        }
+      };
+    } else {
+      dupResult = await sendCommand(config, "duplicateSequence", attachDryRun({ name: duplicateName }, dryRun));
+      if (!dupResult.body || !dupResult.body.ok) {
+        throw new Error(`Failed to duplicate sequence: ${dupResult.body && dupResult.body.error}`);
+      }
     }
 
-    const inventoryResult = await sendCommand(config, "sequenceInventory", {});
+    const inventoryResult = await sendCommand(config, "sequenceInventory", attachDryRun({}, dryRun));
     if (!inventoryResult.body || !inventoryResult.body.ok) {
       throw new Error(`Failed to read sequence inventory: ${inventoryResult.body && inventoryResult.body.error}`);
     }
@@ -631,23 +682,45 @@ async function main() {
     const gaps = computeGaps(included, bounds);
     const processed = [];
     for (const gap of gaps.slice().sort((a, b) => b.startTicks - a.startTicks)) {
-      const extractResult = await sendCommand(config, "extractRange", {
-        inTicks: gap.startTicks,
-        outTicks: gap.endTicks
-      });
+      const gapDurationSeconds = ticksToSeconds(gap.endTicks - gap.startTicks);
+      if (dryRun) {
+        processed.push({
+          gap,
+          seconds: gapDurationSeconds,
+          method: "dryRun",
+          skipped: true
+        });
+        continue;
+      }
+      const extractResult = await sendCommand(
+        config,
+        "extractRange",
+        attachDryRun(
+          {
+            inTicks: gap.startTicks,
+            outTicks: gap.endTicks
+          },
+          dryRun
+        )
+      );
       if (!extractResult.body || !extractResult.body.ok) {
         throw new Error(`Failed to extract gap ${gap.startTicks}-${gap.endTicks}: ${extractResult.body && extractResult.body.error}`);
       }
       processed.push({
         gap,
-        seconds: ticksToSeconds(gap.endTicks - gap.startTicks),
+        seconds: gapDurationSeconds,
         method: extractResult.body.data && extractResult.body.data.extract && extractResult.body.data.extract.method
       });
     }
 
-    const saveResult = await sendCommand(config, "saveProject", {});
+    const saveResult = dryRun
+      ? { statusCode: 200, body: { ok: true, data: { dryRun: true, skipped: true } } }
+      : await sendCommand(config, "saveProject", attachDryRun({}, dryRun));
 
     const output = {
+      dryRun,
+      sourceSequence: activeName,
+      targetSequenceName: duplicateName,
       duplicate: dupResult.body.data,
       bounds: {
         startTicks: String(bounds.startTicks),
@@ -662,6 +735,11 @@ async function main() {
         startTicks: String(r.startTicks),
         endTicks: String(r.endTicks),
         durationSeconds: ticksToSeconds(r.endTicks - r.startTicks)
+      })),
+      gapsPlanned: gaps.map((gap) => ({
+        startTicks: String(gap.startTicks),
+        endTicks: String(gap.endTicks),
+        durationSeconds: ticksToSeconds(gap.endTicks - gap.startTicks)
       })),
       gapsProcessed: processed,
       saveProject: saveResult.body
@@ -687,7 +765,7 @@ async function main() {
     if (args.unit !== undefined) {
       payload.unit = String(args.unit);
     }
-    const result = await sendCommand(config, "razorAtTimecode", payload);
+    const result = await sendCommand(config, "razorAtTimecode", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -696,7 +774,11 @@ async function main() {
     if (!args.file) {
       throw new Error("Provide --file for add-markers-file");
     }
-    const result = await sendCommand(config, "addMarkersFromFile", { filePath: args.file });
+    const result = await sendCommand(
+      config,
+      "addMarkersFromFile",
+      attachDryRun({ filePath: args.file }, dryRun)
+    );
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -718,7 +800,7 @@ async function main() {
     if (args.mute !== undefined) {
       payload.mute = String(args.mute).toLowerCase() === "true";
     }
-    const result = await sendCommand(config, "toggleVideoTrack", payload);
+    const result = await sendCommand(config, "toggleVideoTrack", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
