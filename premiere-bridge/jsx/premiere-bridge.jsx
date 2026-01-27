@@ -261,6 +261,32 @@ PremiereBridge._ticksToTimecode = function (ticks) {
       }
     }
   }
+  // Manual fallback when QE timecode conversion is unavailable.
+  try {
+    var seq = app.project.activeSequence;
+    var timebase = PremiereBridge._getSequenceTimebase(seq);
+    var nominalFps = PremiereBridge._getNominalFps(seq, timebase);
+    var tb = Number(timebase);
+    var fps = Math.max(1, Math.round(Number(nominalFps)));
+    if (!tb || !fps || isNaN(tb) || isNaN(fps) || tb <= 0 || fps <= 0) {
+      return null;
+    }
+    var totalFrames = Math.max(0, Math.round(Number(ticks) / tb));
+    var framesPerHour = fps * 3600;
+    var framesPerMinute = fps * 60;
+    var hours = Math.floor(totalFrames / framesPerHour);
+    totalFrames = totalFrames % framesPerHour;
+    var minutes = Math.floor(totalFrames / framesPerMinute);
+    totalFrames = totalFrames % framesPerMinute;
+    var seconds = Math.floor(totalFrames / fps);
+    var frames = totalFrames % fps;
+    function pad2(n) {
+      var v = Math.max(0, Math.floor(Number(n)));
+      return (v < 10 ? "0" : "") + String(v);
+    }
+    return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds) + ":" + pad2(frames);
+  } catch (errFallback) {
+  }
   return null;
 };
 
@@ -398,26 +424,57 @@ PremiereBridge._setInOutTicks = function (sequence, qeSeq, inTicks, outTicks) {
     return false;
   }
 
-  var inApplied = false;
-  var outApplied = false;
-
-  // Prefer DOM here; QE accepts different units in some contexts.
-  inApplied = setPoint(sequence, "setInPoint", inTicks, "DOM in", "dom.");
-  outApplied = setPoint(sequence, "setOutPoint", outTicks, "DOM out", "dom.");
-
-  if ((!inApplied || !outApplied) && qeSeq) {
-    if (!inApplied) {
-      inApplied = setPoint(qeSeq, "setInPoint", inTicks, "QE in", "qe.");
+  function setQePoint(target, setterName, ticksValue, timecodeValue, label) {
+    if (!target || !target[setterName]) {
+      return false;
     }
-    if (!outApplied) {
-      outApplied = setPoint(qeSeq, "setOutPoint", outTicks, "QE out", "qe.");
+    var applied = false;
+    var secondsValue = Number(ticksValue) / PremiereBridge.TICKS_PER_SECOND;
+    var candidates = [];
+    if (timecodeValue) {
+      candidates.push({ value: String(timecodeValue), tag: "timecode" });
     }
+    if (!isNaN(secondsValue)) {
+      candidates.push({ value: secondsValue, tag: "seconds" });
+    }
+    // Avoid passing raw ticks to QE setInPoint/setOutPoint; units vary.
+    for (var i = 0; i < candidates.length; i++) {
+      var candidate = candidates[i];
+      try {
+        target[setterName](candidate.value);
+        methods.push("qe." + setterName + "(" + candidate.tag + ")");
+        applied = true;
+        break;
+      } catch (errCandidate) {
+        errors.push(label + " (" + candidate.tag + "): " + String(errCandidate));
+      }
+    }
+    return applied;
   }
+
+  // Keep DOM and QE in/out points in sync; extract operations may consult QE.
+  var domInApplied = setPoint(sequence, "setInPoint", inTicks, "DOM in", "dom.");
+  var domOutApplied = setPoint(sequence, "setOutPoint", outTicks, "DOM out", "dom.");
+  var qeInApplied = false;
+  var qeOutApplied = false;
+  var inTimecode = PremiereBridge._ticksToTimecode(inTicks);
+  var outTimecode = PremiereBridge._ticksToTimecode(outTicks);
+  if (qeSeq) {
+    qeInApplied = setQePoint(qeSeq, "setInPoint", inTicks, inTimecode, "QE in");
+    qeOutApplied = setQePoint(qeSeq, "setOutPoint", outTicks, outTimecode, "QE out");
+  }
+
+  var inApplied = domInApplied || qeInApplied;
+  var outApplied = domOutApplied || qeOutApplied;
 
   return {
     ok: inApplied && outApplied,
     inApplied: inApplied,
     outApplied: outApplied,
+    domInApplied: domInApplied,
+    domOutApplied: domOutApplied,
+    qeInApplied: qeInApplied,
+    qeOutApplied: qeOutApplied,
     methods: methods,
     errors: errors,
     available: {

@@ -233,7 +233,9 @@ function parseTimecodeToFrames(timecode, fps, dropFrameHint) {
     return null;
   }
   const raw = String(timecode);
-  const dropFrame = raw.includes(";") || dropFrameHint === true;
+  // Respect the sequence drop-frame setting; do not infer drop-frame solely
+  // from semicolons when the sequence is explicitly non-drop.
+  const dropFrame = dropFrameHint === true || (dropFrameHint !== false && raw.includes(";"));
   const clean = raw.replace(/;/g, ":");
   const parts = clean.split(":");
   if (parts.length < 4) {
