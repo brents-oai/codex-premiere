@@ -310,6 +310,19 @@ PremiereBridge._sequenceStartTicks = function (sequence, qeSeq) {
   return Math.round(Number(startTicks));
 };
 
+PremiereBridge._frameToTicks = function (frameValue, sequence, qeSeq) {
+  var frame = Number(frameValue);
+  if (isNaN(frame)) {
+    return null;
+  }
+  var timebase = PremiereBridge._getSequenceTimebase(sequence);
+  if (!timebase) {
+    return null;
+  }
+  var startTicks = PremiereBridge._sequenceStartTicks(sequence, qeSeq);
+  return Math.round(Number(startTicks) + (Math.round(frame) * Number(timebase)));
+};
+
 PremiereBridge._ticksFromPayload = function (payload, prefix) {
   if (!payload) {
     return null;
@@ -781,25 +794,51 @@ PremiereBridge._timecodeToTicks = function (timecode) {
   return null;
 };
 
-PremiereBridge._toTime = function (marker) {
+PremiereBridge._toTime = function (marker, sequence, qeSeq) {
   if (!marker) {
     return null;
   }
 
   var t = new Time();
+  function applyTicks(ticksValue) {
+    if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+      return false;
+    }
+    var rounded = Math.round(Number(ticksValue));
+    t.ticks = String(rounded);
+    t.seconds = rounded / PremiereBridge.TICKS_PER_SECOND;
+    return true;
+  }
+
+  function tryFrameKeys(keys) {
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (marker[key] === undefined || marker[key] === null) {
+        continue;
+      }
+      var ticksFromFrame = PremiereBridge._frameToTicks(marker[key], sequence, qeSeq);
+      if (applyTicks(ticksFromFrame)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   if (marker.timecode !== undefined && marker.timecode !== null) {
     var ticksFromTimecode = PremiereBridge._timecodeToTicks(String(marker.timecode));
-    if (ticksFromTimecode !== null && ticksFromTimecode !== undefined) {
-      t.ticks = String(ticksFromTimecode);
+    if (applyTicks(ticksFromTimecode)) {
       return t;
     }
+  }
+
+  if (tryFrameKeys(["frame", "frameNumber", "frameIndex"])) {
+    return t;
   }
 
   if (marker.timeSeconds !== undefined && marker.timeSeconds !== null) {
     var secondsValue = Number(marker.timeSeconds);
     if (!isNaN(secondsValue)) {
-      t.ticks = String(PremiereBridge._secondsToTicks(secondsValue));
+      applyTicks(PremiereBridge._secondsToTicks(secondsValue));
       return t;
     }
   }
@@ -807,15 +846,14 @@ PremiereBridge._toTime = function (marker) {
   if (marker.time !== undefined && marker.time !== null) {
     var timeValue = Number(marker.time);
     if (!isNaN(timeValue)) {
-      t.ticks = String(PremiereBridge._secondsToTicks(timeValue));
+      applyTicks(PremiereBridge._secondsToTicks(timeValue));
       return t;
     }
   }
 
   if (marker.timeTicks !== undefined && marker.timeTicks !== null) {
     var tickValue = Number(marker.timeTicks);
-    if (!isNaN(tickValue)) {
-      t.ticks = String(tickValue);
+    if (applyTicks(tickValue)) {
       return t;
     }
   }
@@ -2100,12 +2138,13 @@ PremiereBridge.addMarkersFromJSON = function (jsonStr) {
     }
 
     var markerCollection = sequence.markers;
+    var qeSeq = PremiereBridge._getQeSequence();
     var added = 0;
     var errors = [];
 
     for (var i = 0; i < data.markers.length; i++) {
       var markerData = data.markers[i];
-      var startTime = PremiereBridge._toTime(markerData);
+      var startTime = PremiereBridge._toTime(markerData, sequence, qeSeq);
       if (!startTime) {
         errors.push({ index: i, error: "Invalid time" });
         continue;
