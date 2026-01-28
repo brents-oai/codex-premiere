@@ -2443,6 +2443,260 @@ PremiereBridge.listSequences = function (jsonStr) {
   }
 };
 
+PremiereBridge.findProjectItem = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var project = app.project;
+    if (!project || !project.rootItem) {
+      return PremiereBridge._err("No project root item available");
+    }
+
+    var nameNeedleRaw = payload.name !== undefined && payload.name !== null ? String(payload.name) : null;
+    var pathNeedleRaw = payload.path !== undefined && payload.path !== null ? String(payload.path) : null;
+    if (!nameNeedleRaw && !pathNeedleRaw) {
+      return PremiereBridge._err("Provide --name or --path");
+    }
+
+    var contains = payload.contains === true;
+    var caseSensitive = payload.caseSensitive === true;
+    var limit = payload.limit !== undefined && payload.limit !== null ? Math.round(Number(payload.limit)) : 25;
+    if (isNaN(limit) || limit <= 0) {
+      limit = 25;
+    }
+    if (limit > 500) {
+      limit = 500;
+    }
+
+    function normalizeValue(value) {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      var str = String(value);
+      return caseSensitive ? str : str.toLowerCase();
+    }
+
+    function normalizePathParts(value) {
+      if (!value) {
+        return [];
+      }
+      var raw = String(value).replace(/\\/g, "/");
+      var parts = raw.split("/");
+      var clean = [];
+      for (var i = 0; i < parts.length; i++) {
+        var part = parts[i];
+        if (!part) {
+          continue;
+        }
+        clean.push(String(part));
+      }
+      return clean;
+    }
+
+    var nameNeedle = normalizeValue(nameNeedleRaw);
+    var pathNeedleParts = normalizePathParts(pathNeedleRaw);
+    var pathNeedle = normalizeValue(pathNeedleParts.join("/"));
+
+    function matchesName(name) {
+      if (!nameNeedle) {
+        return true;
+      }
+      var normalized = normalizeValue(name);
+      if (!normalized) {
+        return false;
+      }
+      if (contains) {
+        return normalized.indexOf(nameNeedle) !== -1;
+      }
+      return normalized === nameNeedle;
+    }
+
+    function matchesPath(fullPath) {
+      if (!pathNeedle) {
+        return true;
+      }
+      var normalized = normalizeValue(fullPath);
+      if (!normalized) {
+        return false;
+      }
+      if (contains) {
+        return normalized.indexOf(pathNeedle) !== -1;
+      }
+      return normalized === pathNeedle;
+    }
+
+    function getChildCount(item) {
+      if (!item || !item.children) {
+        return 0;
+      }
+      return PremiereBridge._collectionCount(item.children, 4096);
+    }
+
+    function readSequenceInfo(item) {
+      if (!item || !item.getSequence) {
+        return null;
+      }
+      try {
+        var seq = item.getSequence();
+        if (!seq) {
+          return null;
+        }
+        var seqId = null;
+        try {
+          if (seq.sequenceID !== undefined && seq.sequenceID !== null) {
+            seqId = String(seq.sequenceID);
+          } else if (seq.id !== undefined && seq.id !== null) {
+            seqId = String(seq.id);
+          }
+        } catch (errSeqId) {
+        }
+        return {
+          name: seq.name ? String(seq.name) : null,
+          id: seqId
+        };
+      } catch (errSeq) {
+      }
+      return null;
+    }
+
+    var matches = [];
+    var truncated = false;
+    var stop = false;
+    var scannedItems = 0;
+    var scannedBins = 0;
+
+    function recordMatch(item, binParts, childCount, isBin, matchName, matchPath) {
+      var itemName = item && item.name ? String(item.name) : null;
+      var binPath = binParts.length ? binParts.join("/") : "";
+      var fullPathParts = binParts.slice(0);
+      if (itemName) {
+        fullPathParts.push(itemName);
+      }
+      var fullPath = fullPathParts.join("/");
+
+      var nodeId = null;
+      try {
+        if (item && item.nodeId !== undefined && item.nodeId !== null) {
+          nodeId = String(item.nodeId);
+        } else if (item && item.id !== undefined && item.id !== null) {
+          nodeId = String(item.id);
+        }
+      } catch (errNodeId) {
+      }
+
+      var typeValue = null;
+      try {
+        if (item && item.type !== undefined && item.type !== null) {
+          typeValue = String(item.type);
+        }
+      } catch (errType) {
+      }
+
+      var mediaPath = null;
+      try {
+        if (item && item.getMediaPath) {
+          mediaPath = item.getMediaPath();
+          if (mediaPath !== undefined && mediaPath !== null) {
+            mediaPath = String(mediaPath);
+          } else {
+            mediaPath = null;
+          }
+        }
+      } catch (errMediaPath) {
+      }
+
+      matches.push({
+        name: itemName,
+        nodeId: nodeId,
+        type: typeValue,
+        isBin: !!isBin,
+        childrenCount: childCount,
+        binPath: binPath,
+        fullPath: fullPath,
+        mediaPath: mediaPath,
+        sequence: readSequenceInfo(item),
+        match: {
+          name: !!matchName,
+          path: !!matchPath
+        }
+      });
+
+      if (matches.length >= limit) {
+        truncated = true;
+        stop = true;
+      }
+    }
+
+    function walk(container, binParts) {
+      if (stop || !container || !container.children) {
+        return;
+      }
+      var children = container.children;
+      var count = PremiereBridge._collectionCount(children, 4096);
+      for (var i = 0; i < count; i++) {
+        if (stop) {
+          return;
+        }
+        var child = null;
+        try {
+          child = children[i];
+        } catch (errChild) {
+        }
+        if (!child) {
+          continue;
+        }
+
+        scannedItems++;
+        var childName = child.name ? String(child.name) : null;
+        var childCount = getChildCount(child);
+        var hasChildren = child && child.children ? true : false;
+        var isBin = hasChildren;
+        if (isBin) {
+          scannedBins++;
+        }
+
+        var fullPathParts = binParts.slice(0);
+        if (childName) {
+          fullPathParts.push(childName);
+        }
+        var fullPath = fullPathParts.join("/");
+
+        var matchName = matchesName(childName);
+        var matchPath = matchesPath(fullPath);
+        var matchesQuery = (nameNeedle ? matchName : true) && (pathNeedle ? matchPath : true);
+        if (matchesQuery) {
+          recordMatch(child, binParts, childCount, isBin, matchName, matchPath);
+        }
+
+        if (hasChildren && childName) {
+          walk(child, binParts.concat([childName]));
+        } else if (hasChildren) {
+          walk(child, binParts);
+        }
+      }
+    }
+
+    walk(project.rootItem, []);
+
+    return PremiereBridge._ok({
+      query: {
+        name: nameNeedleRaw,
+        path: pathNeedleRaw,
+        contains: contains,
+        caseSensitive: caseSensitive,
+        limit: limit
+      },
+      matches: matches,
+      truncated: truncated,
+      scanned: {
+        items: scannedItems,
+        bins: scannedBins
+      }
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge._uniqueSequenceName = function (baseName, existingNames) {
   var base = String(baseName || "Sequence Copy");
   var taken = {};

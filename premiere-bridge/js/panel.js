@@ -333,6 +333,9 @@
     if (command === "openSequence") {
       return evalExtendScript("openSequence", cleanPayload);
     }
+    if (command === "findProjectItem") {
+      return evalExtendScript("findProjectItem", cleanPayload);
+    }
     if (command === "findMenuCommandId") {
       return evalExtendScript("findMenuCommandId", cleanPayload);
     }
