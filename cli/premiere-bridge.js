@@ -16,6 +16,7 @@ Usage:
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
+  premiere-bridge find-item (--name NAME | --path BIN/ITEM) [--contains] [--case-sensitive] [--limit N] [--port N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge sequence-inventory [--port N] [--token TOKEN]
@@ -585,6 +586,35 @@ async function main() {
       payload.id = String(args.id);
     }
     const result = await sendCommand(config, "openSequence", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "find-item") {
+    if (!args.name && !args.path) {
+      throw new Error("Provide --name or --path for find-item");
+    }
+    const payload = {};
+    if (args.name) {
+      payload.name = String(args.name);
+    }
+    if (args.path) {
+      payload.path = String(args.path);
+    }
+    if (flagEnabled(args, "contains")) {
+      payload.contains = true;
+    }
+    if (flagEnabled(args, "case-sensitive")) {
+      payload.caseSensitive = true;
+    }
+    if (args.limit !== undefined) {
+      const limit = Number(args.limit);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        throw new Error("--limit must be a positive number");
+      }
+      payload.limit = Math.round(limit);
+    }
+    const result = await sendCommand(config, "findProjectItem", payload);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
