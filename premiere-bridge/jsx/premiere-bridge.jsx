@@ -2959,8 +2959,9 @@ PremiereBridge.duplicateSequence = function (jsonStr) {
   }
 };
 
-PremiereBridge.reloadProject = function () {
+PremiereBridge.reloadProject = function (jsonStr) {
   try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
     var project = app.project;
     if (!project) {
       return PremiereBridge._err("No project loaded");
@@ -2969,6 +2970,18 @@ PremiereBridge.reloadProject = function () {
     var projectPath = project.path;
     if (!projectPath) {
       return PremiereBridge._err("Project has no file path");
+    }
+
+    var activeBefore = null;
+    try {
+      var activeSeq = project.activeSequence;
+      if (activeSeq) {
+        activeBefore = {
+          name: activeSeq.name ? String(activeSeq.name) : null,
+          id: activeSeq.sequenceID ? String(activeSeq.sequenceID) : null
+        };
+      }
+    } catch (errActiveBefore) {
     }
 
     try {
@@ -2987,28 +3000,67 @@ PremiereBridge.reloadProject = function () {
       }
     }
 
+    var openMethod = null;
     if (app.openDocument) {
       try {
         app.openDocument(file);
-        return PremiereBridge._ok({ method: "app.openDocument(file)" });
+        openMethod = "app.openDocument(file)";
       } catch (openErr1) {
         try {
           app.openDocument(filePath);
-          return PremiereBridge._ok({ method: "app.openDocument(path)" });
+          openMethod = "app.openDocument(path)";
         } catch (openErr2) {
         }
       }
     }
 
-    if (app.openDocument2) {
+    if (!openMethod && app.openDocument2) {
       try {
         app.openDocument2(filePath);
-        return PremiereBridge._ok({ method: "app.openDocument2" });
+        openMethod = "app.openDocument2";
       } catch (openErr3) {
       }
     }
 
-    return PremiereBridge._err("Reload is not supported by the current scripting API");
+    if (!openMethod) {
+      return PremiereBridge._err("Reload is not supported by the current scripting API");
+    }
+
+    if ($ && $.sleep) {
+      try {
+        $.sleep(200);
+      } catch (errSleep) {
+      }
+    }
+
+    var restored = null;
+    if (!payload.skipRestoreActiveSequence && activeBefore && (activeBefore.id || activeBefore.name)) {
+      try {
+        var restorePayload = activeBefore.id ? { id: activeBefore.id } : { name: activeBefore.name };
+        var restoreRaw = PremiereBridge.openSequence(JSON.stringify(restorePayload));
+        var restoreParsed = PremiereBridge._parse(restoreRaw);
+        if (restoreParsed && restoreParsed.ok) {
+          restored = {
+            ok: true,
+            sequence: restoreParsed.data && restoreParsed.data.sequence ? restoreParsed.data.sequence : restorePayload,
+            method: restoreParsed.data && restoreParsed.data.methods ? restoreParsed.data.methods : null
+          };
+        } else {
+          restored = {
+            ok: false,
+            error: restoreParsed && restoreParsed.error ? restoreParsed.error : "restore failed"
+          };
+        }
+      } catch (errRestore) {
+        restored = { ok: false, error: String(errRestore) };
+      }
+    }
+
+    return PremiereBridge._ok({
+      method: openMethod,
+      restoredActiveSequence: restored,
+      activeBefore: activeBefore
+    });
   } catch (err) {
     return PremiereBridge._err(String(err));
   }
