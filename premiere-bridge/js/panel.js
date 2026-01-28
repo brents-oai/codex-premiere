@@ -252,7 +252,8 @@
     "extractRange",
     "rippleDeleteSelection",
     "razorAtTimecode",
-    "toggleVideoTrack"
+    "toggleVideoTrack",
+    "setTrackState"
   ]);
 
   function splitDryRunPayload(payload) {
@@ -361,6 +362,9 @@
     }
     if (command === "toggleVideoTrack") {
       return evalExtendScript("toggleVideoTrack", cleanPayload);
+    }
+    if (command === "setTrackState") {
+      return evalExtendScript("setTrackState", cleanPayload);
     }
     return { ok: false, error: `Unknown command: ${command}` };
   }

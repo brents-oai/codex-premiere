@@ -30,6 +30,7 @@ Usage:
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
   premiere-bridge toggle-video-track --track V1 [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
+  premiere-bridge set-track-state --track V1|A1 [--kind video|audio] [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
 
 Config:
   Reads ~/Library/Application Support/PremiereBridge/config.json when available.
@@ -369,6 +370,23 @@ function numericOrNull(value) {
   }
   const n = Number(value);
   return Number.isNaN(n) ? null : n;
+}
+
+function boolOrNull(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (value === true || value === false) {
+    return value;
+  }
+  const normalized = String(value).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function rangeToTicks(range, context) {
@@ -887,6 +905,33 @@ async function main() {
       payload.mute = String(args.mute).toLowerCase() === "true";
     }
     const result = await sendCommand(config, "toggleVideoTrack", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-track-state") {
+    const payload = {};
+    if (args.track !== undefined) {
+      payload.track = String(args.track);
+    }
+    if (args.kind !== undefined) {
+      payload.kind = String(args.kind);
+    }
+    const mute = boolOrNull(args.mute);
+    const visible = boolOrNull(args.visible);
+    if (mute !== null) {
+      payload.mute = mute;
+    }
+    if (visible !== null) {
+      payload.visible = visible;
+    }
+    if (!payload.track) {
+      throw new Error("Provide --track V1|A1 (or numeric track)");
+    }
+    if (payload.mute === undefined && payload.visible === undefined) {
+      throw new Error("Provide --mute and/or --visible");
+    }
+    const result = await sendCommand(config, "setTrackState", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
