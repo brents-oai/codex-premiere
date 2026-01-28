@@ -858,7 +858,19 @@ PremiereBridge._colorNameFromValue = function (colorValue) {
 };
 
 PremiereBridge._colorIndexFromValue = function (colorValue) {
-  var value = Number(colorValue);
+  if (colorValue === null || colorValue === undefined) {
+    return null;
+  }
+  var raw = colorValue;
+  if (typeof raw === "string") {
+    var trimmed = raw.replace(/^\s+|\s+$/g, "");
+    var parsed = Number(trimmed);
+    if (isNaN(parsed)) {
+      return PremiereBridge._colorIndex(trimmed);
+    }
+    raw = parsed;
+  }
+  var value = Number(raw);
   if (isNaN(value)) {
     return null;
   }
@@ -871,7 +883,13 @@ PremiereBridge._colorIndexFromValue = function (colorValue) {
     4294741314: 6,
     4292277273: 7
   };
-  return map.hasOwnProperty(value) ? map[value] : null;
+  if (map.hasOwnProperty(value)) {
+    return map[value];
+  }
+  if (value >= 0 && value <= 7) {
+    return Math.max(0, Math.min(7, Math.round(value)));
+  }
+  return null;
 };
 
 PremiereBridge._colorIndex = function (colorName) {
@@ -890,6 +908,50 @@ PremiereBridge._colorIndex = function (colorName) {
     cyan: 7
   };
   return map.hasOwnProperty(name) ? map[name] : null;
+};
+
+PremiereBridge._clampColorIndex = function (value) {
+  var n = Number(value);
+  if (isNaN(n)) {
+    return null;
+  }
+  if (n < 0 || n > 7) {
+    return null;
+  }
+  return Math.max(0, Math.min(7, Math.round(n)));
+};
+
+PremiereBridge._resolveColorIndex = function (markerData) {
+  if (!markerData) {
+    return { index: null, source: null };
+  }
+
+  if (markerData.colorIndex !== undefined && markerData.colorIndex !== null) {
+    return {
+      index: PremiereBridge._clampColorIndex(markerData.colorIndex),
+      source: "colorIndex"
+    };
+  }
+
+  if (markerData.colorValue !== undefined && markerData.colorValue !== null) {
+    return {
+      index: PremiereBridge._colorIndexFromValue(markerData.colorValue),
+      source: "colorValue"
+    };
+  }
+
+  if (markerData.color !== undefined && markerData.color !== null) {
+    if (typeof markerData.color === "string") {
+      var numeric = Number(markerData.color);
+      if (!isNaN(numeric)) {
+        return { index: PremiereBridge._clampColorIndex(numeric), source: "color" };
+      }
+      return { index: PremiereBridge._colorIndex(markerData.color), source: "color" };
+    }
+    return { index: PremiereBridge._clampColorIndex(markerData.color), source: "color" };
+  }
+
+  return { index: null, source: null };
 };
 
 PremiereBridge._findMarkerIndex = function (markerCollection, targetMarker) {
@@ -2091,32 +2153,20 @@ PremiereBridge.addMarkersFromJSON = function (jsonStr) {
       }
 
       var colorSet = false;
-      var colorIndex = null;
-      if (markerData.colorIndex !== undefined && markerData.colorIndex !== null) {
-        colorIndex = Number(markerData.colorIndex);
-      } else if (markerData.colorValue !== undefined && markerData.colorValue !== null) {
-        var mappedIndex = PremiereBridge._colorIndexFromValue(markerData.colorValue);
-        if (mappedIndex !== null) {
-          colorIndex = mappedIndex;
-        } else {
-          var rawIndex = Number(markerData.colorValue);
-          if (!isNaN(rawIndex) && rawIndex >= 0 && rawIndex <= 7) {
-            colorIndex = rawIndex;
-          }
-        }
-      } else if (markerData.color !== undefined && markerData.color !== null) {
-        if (typeof markerData.color === "number") {
-          colorIndex = Number(markerData.color);
-        } else if (typeof markerData.color === "string") {
-          colorIndex = PremiereBridge._colorIndex(markerData.color);
-        }
-      }
+      var colorResolved = PremiereBridge._resolveColorIndex(markerData);
+      var colorIndex = colorResolved.index;
 
       if (colorIndex !== null && !isNaN(colorIndex)) {
         colorSet = PremiereBridge._applyColorIndex(markerCollection, marker, colorIndex);
-        if (!colorSet && marker.setColorByName && typeof markerData.color === "string") {
+        var colorNameFallback = null;
+        if (typeof markerData.color === "string" && isNaN(Number(markerData.color))) {
+          colorNameFallback = markerData.color;
+        } else if (typeof markerData.colorValue === "string" && isNaN(Number(markerData.colorValue))) {
+          colorNameFallback = markerData.colorValue;
+        }
+        if (!colorSet && marker.setColorByName && colorNameFallback) {
           try {
-            marker.setColorByName(markerData.color);
+            marker.setColorByName(colorNameFallback);
             colorSet = true;
           } catch (errColorNameFallback) {
           }
