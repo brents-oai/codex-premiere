@@ -228,6 +228,15 @@ function deriveNominalFps(inventory, timebase) {
   return 30;
 }
 
+function deriveExactFps(timebase) {
+  const tb = Number(timebase);
+  if (Number.isNaN(tb) || tb <= 0) {
+    return null;
+  }
+  const exact = TICKS_PER_SECOND / tb;
+  return Number.isFinite(exact) && exact > 0 ? exact : null;
+}
+
 function parseTimecodeToFrames(timecode, fps, dropFrameHint) {
   if (!timecode) {
     return null;
@@ -278,7 +287,8 @@ function secondsToFrameTicks(seconds, context, mode) {
   if (!context || !context.timebase || !context.fps) {
     return secondsToTicks(value);
   }
-  const framesFloat = value * context.fps;
+  const fpsForSeconds = context.fpsExact && context.fpsExact > 0 ? context.fpsExact : context.fps;
+  const framesFloat = value * fpsForSeconds;
   let frames;
   if (mode === "ceil") {
     frames = Math.ceil(framesFloat - 1e-9);
@@ -732,9 +742,11 @@ async function main() {
     const inventory = inventoryResult.body.data;
     const bounds = getSequenceBounds(inventory);
     const timebase = deriveTimebase(inventory);
+    const fpsExact = deriveExactFps(timebase);
     const context = {
       timebase,
       fps: deriveNominalFps(inventory, timebase),
+      fpsExact,
       dropFrame: inventory.sequence && inventory.sequence.dropFrame === true,
       sequenceStartTicks: bounds.startTicks,
       noOffset: String(args["no-offset"]).toLowerCase() === "true"
