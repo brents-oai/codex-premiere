@@ -13,6 +13,11 @@
 
   const cep = window.__adobe_cep__;
   const canNode = typeof require === "function";
+  const CSInterfaceCtor = window.CSInterface;
+  const csInterface = CSInterfaceCtor ? new CSInterfaceCtor() : null;
+  const themeChangeEvent =
+    (CSInterfaceCtor && CSInterfaceCtor.THEME_COLOR_CHANGED_EVENT) ||
+    "com.adobe.csxs.events.ThemeColorChanged";
 
   let http;
   let fs;
@@ -25,6 +30,66 @@
   let server = null;
   let config = null;
   let logLines = [];
+  let lastTheme = null;
+
+  function luminanceFromColor(color) {
+    if (!color) {
+      return 0;
+    }
+    const r = Number(color.red || 0) / 255;
+    const g = Number(color.green || 0) / 255;
+    const b = Number(color.blue || 0) / 255;
+    return (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+  }
+
+  function getHostSkinInfo() {
+    try {
+      if (csInterface && csInterface.getHostEnvironment) {
+        const env = csInterface.getHostEnvironment();
+        if (env && env.appSkinInfo) {
+          return env.appSkinInfo;
+        }
+      }
+    } catch (errCs) {
+    }
+    try {
+      if (cep && cep.getHostEnvironment) {
+        const raw = cep.getHostEnvironment();
+        const env = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (env && env.appSkinInfo) {
+          return env.appSkinInfo;
+        }
+      }
+    } catch (errCep) {
+    }
+    return null;
+  }
+
+  function applyThemeFromHost() {
+    let theme = "dark";
+    let bg = null;
+    let lum = 0;
+    try {
+      const skin = getHostSkinInfo();
+      bg = skin && skin.panelBackgroundColor && skin.panelBackgroundColor.color;
+      if (bg) {
+        lum = luminanceFromColor(bg);
+        theme = lum < 0.5 ? "dark" : "light";
+      }
+    } catch (err) {
+      theme = "dark";
+    }
+    if (theme !== lastTheme) {
+      document.documentElement.dataset.theme = theme;
+      lastTheme = theme;
+      if (bg) {
+        const rgb = `${bg.red || 0},${bg.green || 0},${bg.blue || 0}`;
+        log(`Theme -> ${theme} (lum=${lum.toFixed(3)} rgb=${rgb})`);
+      } else {
+        log(`Theme -> ${theme} (no host skin info)`);
+      }
+    }
+  }
 
   function log(message) {
     const time = new Date().toISOString().replace("T", " ").replace("Z", "");
@@ -384,6 +449,12 @@
   }
 
   function init() {
+    applyThemeFromHost();
+    if (csInterface && themeChangeEvent && csInterface.addEventListener) {
+      csInterface.addEventListener(themeChangeEvent, applyThemeFromHost);
+    } else if (cep && themeChangeEvent && cep.addEventListener) {
+      cep.addEventListener(themeChangeEvent, applyThemeFromHost);
+    }
     if (!ensureNodeModules()) {
       setStatus(false);
       startBtn.disabled = true;
