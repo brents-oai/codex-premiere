@@ -27,10 +27,18 @@
 
   const DEFAULT_PORT = 17321;
   const MAX_LOG_LINES = 400;
+  const HEALTH_CHECK_MS = 5000;
+  const RETRY_BASE_MS = 500;
+  const RETRY_MAX_MS = 10000;
   let server = null;
   let config = null;
   let logLines = [];
   let lastTheme = null;
+  let desiredRunning = true;
+  let retryDelayMs = RETRY_BASE_MS;
+  let retryTimer = null;
+  let healthTimer = null;
+  let restarting = false;
 
   function luminanceFromColor(color) {
     if (!color) {
@@ -372,8 +380,49 @@
     });
   }
 
+  function clearRetryTimer() {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  function scheduleRestart(reason) {
+    if (!desiredRunning || retryTimer || server || restarting) {
+      return;
+    }
+    const delay = Math.min(RETRY_MAX_MS, Math.max(RETRY_BASE_MS, retryDelayMs));
+    log(`Server restart scheduled in ${delay}ms${reason ? ` (${reason})` : ""}`);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      startServer();
+    }, delay);
+    retryDelayMs = Math.min(RETRY_MAX_MS, Math.round(delay * 1.7));
+  }
+
+  function ensureHealthCheck() {
+    if (healthTimer) {
+      return;
+    }
+    healthTimer = setInterval(() => {
+      if (!desiredRunning) {
+        return;
+      }
+      if (!server) {
+        scheduleRestart("health-check missing server");
+        return;
+      }
+      if (server.listening === false) {
+        scheduleRestart("health-check not listening");
+      }
+    }, HEALTH_CHECK_MS);
+  }
+
   function startServer() {
-    if (server) {
+    desiredRunning = true;
+    ensureHealthCheck();
+    clearRetryTimer();
+    if (server || restarting) {
       return;
     }
 
@@ -415,16 +464,37 @@
       log(`Server error: ${err.message}`);
       setStatus(false);
       server = null;
+      restarting = false;
+      scheduleRestart(err && err.code ? `error ${err.code}` : "server error");
     });
 
+    server.on("close", () => {
+      const wasDesired = desiredRunning;
+      server = null;
+      restarting = false;
+      setStatus(false);
+      if (wasDesired) {
+        scheduleRestart("server closed");
+      }
+    });
+
+    restarting = true;
     server.listen(config.port, "127.0.0.1", () => {
       log(`Server listening on 127.0.0.1:${config.port}`);
+      retryDelayMs = RETRY_BASE_MS;
+      restarting = false;
       setStatus(true);
     });
   }
 
-  function stopServer() {
+  function stopServer(options) {
+    const opts = options || {};
+    if (!opts.keepDesired) {
+      desiredRunning = false;
+    }
+    clearRetryTimer();
     if (!server) {
+      setStatus(false);
       return;
     }
     server.close(() => {
@@ -442,10 +512,9 @@
     config = nextConfig;
     saveConfig(nextConfig);
     updateFields();
-    if (server) {
-      stopServer();
-      setTimeout(startServer, 200);
-    }
+    desiredRunning = true;
+    stopServer({ keepDesired: true });
+    setTimeout(startServer, 200);
   }
 
   function init() {
