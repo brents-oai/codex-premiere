@@ -3105,15 +3105,24 @@ PremiereBridge.reloadProject = function (jsonStr) {
   }
 };
 
-PremiereBridge.toggleVideoTrack = function (jsonStr) {
+PremiereBridge.setTrackState = function (jsonStr) {
   try {
     var payload = PremiereBridge._parse(jsonStr) || {};
     var trackIndex = null;
+    var kind = payload.kind ? String(payload.kind).toLowerCase() : null;
 
     if (payload.track !== undefined && payload.track !== null) {
       var trackStr = String(payload.track).toUpperCase();
       if (trackStr.indexOf("V") === 0) {
         trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "video";
+        }
+      } else if (trackStr.indexOf("A") === 0) {
+        trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "audio";
+        }
       } else {
         trackIndex = Number(trackStr) - 1;
       }
@@ -3126,6 +3135,12 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
     if (trackIndex === null || isNaN(trackIndex) || trackIndex < 0) {
       return PremiereBridge._err("Invalid track identifier");
     }
+    if (!kind) {
+      kind = "video";
+    }
+    if (kind !== "video" && kind !== "audio") {
+      return PremiereBridge._err("Invalid track kind; use video or audio");
+    }
 
     var desiredMute = null;
     if (payload.mute !== undefined && payload.mute !== null) {
@@ -3133,15 +3148,19 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
     } else if (payload.visible !== undefined && payload.visible !== null) {
       desiredMute = !payload.visible;
     }
+    if (desiredMute === null) {
+      return PremiereBridge._err("Provide mute or visible state");
+    }
 
     var method = null;
     var currentMute = null;
 
     var qeSeq = PremiereBridge._getQeSequence();
-    if (qeSeq && qeSeq.getVideoTrackAt) {
-      var qeTrack = qeSeq.getVideoTrackAt(trackIndex);
+    var qeGetter = kind === "audio" ? "getAudioTrackAt" : "getVideoTrackAt";
+    if (qeSeq && qeSeq[qeGetter]) {
+      var qeTrack = qeSeq[qeGetter](trackIndex);
       if (!qeTrack) {
-        return PremiereBridge._err("Video track not found");
+        return PremiereBridge._err(kind === "audio" ? "Audio track not found" : "Video track not found");
       }
 
       if (qeTrack.isMuted) {
@@ -3162,12 +3181,6 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
       }
 
       var nextMute = desiredMute;
-      if (nextMute === null) {
-        if (currentMute === null) {
-          return PremiereBridge._err("Unable to determine current track state for toggle");
-        }
-        nextMute = !currentMute;
-      }
 
       if (qeTrack.setMute) {
         qeTrack.setMute(nextMute ? 1 : 0);
@@ -3176,26 +3189,30 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
         qeTrack.setEnabled(!nextMute);
         method = "qe.setEnabled";
       } else {
-        return PremiereBridge._err("Unable to toggle video track (no supported setter)");
+        return PremiereBridge._err("Unable to set track state (no supported setter)");
       }
 
-      return PremiereBridge._ok({ trackIndex: trackIndex, muted: nextMute, method: method });
+      return PremiereBridge._ok({ kind: kind, trackIndex: trackIndex, muted: nextMute, method: method });
     }
 
     var sequence = app.project.activeSequence;
-    if (!sequence || !sequence.videoTracks) {
-      return PremiereBridge._err("No active sequence or video tracks");
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
     }
 
     var track = null;
-    if (sequence.videoTracks[trackIndex]) {
-      track = sequence.videoTracks[trackIndex];
-    } else if (sequence.videoTracks.numTracks && trackIndex < sequence.videoTracks.numTracks) {
-      track = sequence.videoTracks[trackIndex];
+    var domTracks = kind === "audio" ? sequence.audioTracks : sequence.videoTracks;
+    if (!domTracks) {
+      return PremiereBridge._err(kind === "audio" ? "No audio tracks" : "No video tracks");
+    }
+    if (domTracks[trackIndex]) {
+      track = domTracks[trackIndex];
+    } else if (domTracks.numTracks && trackIndex < domTracks.numTracks) {
+      track = domTracks[trackIndex];
     }
 
     if (!track) {
-      return PremiereBridge._err("Video track not found");
+      return PremiereBridge._err(kind === "audio" ? "Audio track not found" : "Video track not found");
     }
 
     if (track.isMuted) {
@@ -3216,12 +3233,6 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
     }
 
     var fallbackMute = desiredMute;
-    if (fallbackMute === null) {
-      if (currentMute === null) {
-        return PremiereBridge._err("Unable to determine current track state for toggle");
-      }
-      fallbackMute = !currentMute;
-    }
 
     if (track.setMute) {
       track.setMute(fallbackMute ? 1 : 0);
@@ -3230,11 +3241,17 @@ PremiereBridge.toggleVideoTrack = function (jsonStr) {
       track.setEnabled(!fallbackMute);
       method = "dom.setEnabled";
     } else {
-      return PremiereBridge._err("Unable to toggle video track (no supported setter)");
+      return PremiereBridge._err("Unable to set track state (no supported setter)");
     }
 
-    return PremiereBridge._ok({ trackIndex: trackIndex, muted: fallbackMute, method: method });
+    return PremiereBridge._ok({ kind: kind, trackIndex: trackIndex, muted: fallbackMute, method: method });
   } catch (err) {
     return PremiereBridge._err(String(err));
   }
+};
+
+PremiereBridge.toggleVideoTrack = function (jsonStr) {
+  var payload = PremiereBridge._parse(jsonStr) || {};
+  payload.kind = "video";
+  return PremiereBridge.setTrackState(JSON.stringify(payload));
 };
