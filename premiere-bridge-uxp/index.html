@@ -10,14 +10,14 @@
     <main class="app">
       <header class="header">
         <h1 class="title">Premiere Bridge UXP</h1>
-        <p class="subtitle">Transcript export via UXP</p>
+        <p class="subtitle">Command bridge + transcript export</p>
       </header>
 
       <section class="panel">
         <div class="row">
           <div>
-            <div class="label">IPC status</div>
-            <div id="ipc-status" class="value">Starting...</div>
+            <div class="label">Server status</div>
+            <div id="ipc-status" class="value offline">Offline</div>
           </div>
           <div>
             <div class="label">Last command</div>
@@ -26,17 +26,39 @@
         </div>
 
         <div class="actions">
-          <button id="start-btn" class="btn">Start IPC</button>
-          <button id="stop-btn" class="btn ghost">Stop IPC</button>
-          <button id="export-btn" class="btn accent">Export Transcript Now</button>
+          <button id="startBtn" class="btn">Start</button>
+          <button id="stopBtn" class="btn ghost">Stop</button>
+          <button id="pingBtn" class="btn ghost">Ping</button>
         </div>
 
-        <div class="path-block">
+        <div class="card">
+          <div class="label">Connection</div>
+          <div class="field">
+            <label class="field-label" for="port">Port</label>
+            <input id="port" class="input" type="number" min="1" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="token">Token</label>
+            <div class="inline-actions">
+              <input id="token" class="input" type="text" />
+              <button id="regenBtn" class="btn small">Regenerate</button>
+            </div>
+          </div>
+          <div class="inline-actions">
+            <button id="saveBtn" class="btn">Save Config</button>
+            <button id="saveProjectBtn" class="btn ghost">Save Project</button>
+            <button id="reloadBtn" class="btn ghost">Reload Project</button>
+            <button id="exportBtn" class="btn accent">Export Transcript</button>
+          </div>
+          <div id="configPath" class="path muted">Config: resolving...</div>
+        </div>
+
+        <div class="card">
           <div class="label">IPC directory</div>
           <div id="ipc-dir" class="path">Resolving...</div>
         </div>
 
-        <div class="log-block">
+        <div class="card log-card">
           <div class="label">Logs</div>
           <pre id="log" class="log"></pre>
         </div>
