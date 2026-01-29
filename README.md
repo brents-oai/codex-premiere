@@ -1,8 +1,19 @@
 # Premiere Bridge
 
-Local IPC bridge for Adobe Premiere Pro 25.6.4 on macOS. Provides a CEP panel that listens on localhost and a Node CLI to send commands.
+Local IPC bridge for Adobe Premiere Pro on macOS. Provides both a UXP panel (preferred) and a CEP panel (legacy) plus a Node CLI to send commands.
 
-## Install the CEP panel (dev mode)
+## Install the UXP panel (preferred)
+
+1. Open UXP Developer Tools.
+2. Add a plugin and select `/Users/brents/code/codex-premiere/premiere-bridge-uxp`.
+3. In Premiere, open the panel:
+
+`Window > Extensions (UXP) > Premiere Bridge UXP`
+
+The UXP panel creates and maintains the shared config file at:
+`~/Library/Application Support/PremiereBridge/config.json`
+
+## Install the CEP panel (optional / legacy)
 
 1. Enable unsigned CEP extensions:
 
@@ -23,12 +34,11 @@ ln -s /Users/brents/code/codex-premiere/premiere-bridge \
 
 `Window > Extensions > Premiere Bridge`
 
-The panel writes a config file at:
-`~/Library/Application Support/PremiereBridge/config.json`
+The CEP panel writes the same config file used by the UXP panel and CLI.
 
 ## CLI usage
 
-The CLI reads the config file above for the port and token.
+The CLI reads the shared config file above for the port, token, and preferred transport. Use `--transport uxp|cep|auto` to override.
 
 ```bash
 ./cli/premiere-bridge.js ping
@@ -82,7 +92,7 @@ Color indices:
 - `list-sequences`
 - `open-sequence`
 - `find-item`
-- `transcript-json` (requires the UXP panel below)
+- `transcript-json` (requires the UXP panel)
 - `sequence-info`
 - `sequence-inventory`
 - `debug-timecode`
@@ -96,23 +106,21 @@ Color indices:
 - `add-markers-file`
 - `toggle-video-track`
 
-## UXP Transcript Export (Experimental)
+## UXP Command Bridge (Experimental)
 
-Transcript export appears to be available via UXP (not CEP). This repo now includes
-a minimal UXP panel at `premiere-bridge-uxp/` that exports the active sequence
-transcript to JSON.
+The UXP panel at `premiere-bridge-uxp/` now acts as a command bridge (not just
+transcript export). The CLI can talk to it via file-based IPC.
 
 High-level flow:
 - The UXP panel polls a file-based IPC directory.
-- The CLI writes a `transcriptJSON` command to that directory.
+- The CLI writes a command to that directory.
 - The UXP panel writes the result back to disk for the CLI to read.
 
 ### Setup (UXP Developer Tools)
 
 1) Open UXP Developer Tools and load `premiere-bridge-uxp/` as a plugin.
 2) In Premiere, open the panel: `Window > Extensions (UXP) > Premiere Bridge UXP`.
-3) Make sure the CEP panel has run at least once to create:
-   `~/Library/Application Support/PremiereBridge/config.json` (for the shared token).
+3) Click \"Save Config\" in the UXP panel at least once to create the shared token.
 
 ### IPC Location
 
@@ -121,15 +129,15 @@ The UXP panel and CLI communicate via:
 - `~/Library/Application Support/PremiereBridge/uxp-ipc/command.json`
 - `~/Library/Application Support/PremiereBridge/uxp-ipc/result.json`
 
-### CLI Usage
+### CLI Usage (UXP transport)
 
 ```bash
-./cli/premiere-bridge.js transcript-json
-./cli/premiere-bridge.js transcript-json --timeout-seconds 60
+./cli/premiere-bridge.js ping --transport uxp
+./cli/premiere-bridge.js transcript-json --timeout-seconds 60 --transport uxp
 ```
 
-If the command times out, ensure the UXP panel is open and the active sequence
-has a transcript available in the Text panel.
+By default, the CLI uses the transport stored in the shared config file. When
+the UXP panel saves the config, it sets `transport: \"uxp\"`.
 
 ## Rough Cut Command Set
 
