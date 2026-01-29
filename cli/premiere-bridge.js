@@ -17,6 +17,7 @@ Usage:
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
   premiere-bridge find-item (--name NAME | --path BIN/ITEM) [--contains] [--case-sensitive] [--limit N] [--port N] [--token TOKEN]
+  premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge sequence-inventory [--port N] [--token TOKEN]
@@ -117,6 +118,10 @@ function attachDryRun(payload, dryRun) {
     return base;
   }
   return Object.assign({}, base, { __dryRun: true });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeMarkers(input) {
@@ -617,6 +622,66 @@ async function main() {
     const result = await sendCommand(config, "findProjectItem", payload);
     console.log(JSON.stringify(result, null, 2));
     return;
+  }
+
+  if (command === "transcript-json") {
+    const baseDir = path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
+    const ipcDir = path.join(baseDir, "uxp-ipc");
+    const commandFile = path.join(ipcDir, "command.json");
+    const resultFile = path.join(ipcDir, "result.json");
+
+    if (!config.token) {
+      throw new Error("Missing token in config; open the CEP panel at least once to generate it.");
+    }
+
+    fs.mkdirSync(ipcDir, { recursive: true });
+
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const commandPayload = {
+      id,
+      command: "transcriptJSON",
+      payload: {},
+      token: config.token
+    };
+    fs.writeFileSync(commandFile, JSON.stringify(commandPayload, null, 2));
+
+    const timeoutSeconds = args["timeout-seconds"] !== undefined ? Number(args["timeout-seconds"]) : 30;
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+      throw new Error("--timeout-seconds must be a positive number");
+    }
+    const timeoutMs = Math.round(timeoutSeconds * 1000);
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (fs.existsSync(resultFile)) {
+        try {
+          const raw = fs.readFileSync(resultFile, "utf8");
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && String(parsed.id) === String(id)) {
+              console.log(
+                JSON.stringify(
+                  {
+                    statusCode: 200,
+                    body: parsed
+                  },
+                  null,
+                  2
+                )
+              );
+              return;
+            }
+          }
+        } catch (errReadResult) {
+          // Keep polling; the file may be mid-write.
+        }
+      }
+      await sleep(500);
+    }
+
+    throw new Error(
+      "Timed out waiting for UXP transcript response. Ensure the Premiere Bridge UXP panel is loaded."
+    );
   }
 
   if (command === "menu-command-id") {
