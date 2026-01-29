@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Premiere Bridge UXP</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1 class="title">Premiere Bridge UXP</h1>
+        <p class="subtitle">Transcript export via UXP</p>
+      </header>
+
+      <section class="panel">
+        <div class="row">
+          <div>
+            <div class="label">IPC status</div>
+            <div id="ipc-status" class="value">Starting...</div>
+          </div>
+          <div>
+            <div class="label">Last command</div>
+            <div id="last-command" class="value muted">None</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="start-btn" class="btn">Start IPC</button>
+          <button id="stop-btn" class="btn ghost">Stop IPC</button>
+          <button id="export-btn" class="btn accent">Export Transcript Now</button>
+        </div>
+
+        <div class="path-block">
+          <div class="label">IPC directory</div>
+          <div id="ipc-dir" class="path">Resolving...</div>
+        </div>
+
+        <div class="log-block">
+          <div class="label">Logs</div>
+          <pre id="log" class="log"></pre>
+        </div>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

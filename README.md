@@ -38,6 +38,7 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js list-sequences
 ./cli/premiere-bridge.js open-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js find-item --name "C0114.MP4" --contains --limit 5
+./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
 ./cli/premiere-bridge.js sequence-inventory
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
@@ -81,6 +82,7 @@ Color indices:
 - `list-sequences`
 - `open-sequence`
 - `find-item`
+- `transcript-json` (requires the UXP panel below)
 - `sequence-info`
 - `sequence-inventory`
 - `debug-timecode`
@@ -93,6 +95,41 @@ Color indices:
 - `add-markers`
 - `add-markers-file`
 - `toggle-video-track`
+
+## UXP Transcript Export (Experimental)
+
+Transcript export appears to be available via UXP (not CEP). This repo now includes
+a minimal UXP panel at `premiere-bridge-uxp/` that exports the active sequence
+transcript to JSON.
+
+High-level flow:
+- The UXP panel polls a file-based IPC directory.
+- The CLI writes a `transcriptJSON` command to that directory.
+- The UXP panel writes the result back to disk for the CLI to read.
+
+### Setup (UXP Developer Tools)
+
+1) Open UXP Developer Tools and load `premiere-bridge-uxp/` as a plugin.
+2) In Premiere, open the panel: `Window > Extensions (UXP) > Premiere Bridge UXP`.
+3) Make sure the CEP panel has run at least once to create:
+   `~/Library/Application Support/PremiereBridge/config.json` (for the shared token).
+
+### IPC Location
+
+The UXP panel and CLI communicate via:
+
+- `~/Library/Application Support/PremiereBridge/uxp-ipc/command.json`
+- `~/Library/Application Support/PremiereBridge/uxp-ipc/result.json`
+
+### CLI Usage
+
+```bash
+./cli/premiere-bridge.js transcript-json
+./cli/premiere-bridge.js transcript-json --timeout-seconds 60
+```
+
+If the command times out, ensure the UXP panel is open and the active sequence
+has a transcript available in the Text panel.
 
 ## Rough Cut Command Set
 

@@ -18,3 +18,8 @@ dist/
 build/
 coverage/
 WORKPLAN.md
+
+# Local transcript exports and rough-cut test artifacts
+transcript*.json
+transcript*-compact.txt
+ranges-*-story.json
