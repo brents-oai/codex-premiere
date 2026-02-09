@@ -13,6 +13,7 @@ Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
+  premiere-bridge export-sequence-audio --transport cep|uxp [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
@@ -530,6 +531,58 @@ function sendCommand(config, cmd, payload) {
   });
 }
 
+function appSupportDir() {
+  return path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
+}
+
+async function sendUxpIpcCommand(config, command, payload, timeoutSeconds) {
+  const ipcDir = path.join(appSupportDir(), "uxp-ipc");
+  const commandFile = path.join(ipcDir, "command.json");
+  const resultFile = path.join(ipcDir, "result.json");
+
+  if (!config.token) {
+    throw new Error("Missing token in config; open the CEP panel at least once to generate it.");
+  }
+
+  fs.mkdirSync(ipcDir, { recursive: true });
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const commandPayload = {
+    id,
+    command,
+    payload: payload || {},
+    token: config.token
+  };
+  fs.writeFileSync(commandFile, JSON.stringify(commandPayload, null, 2));
+
+  const timeout = timeoutSeconds !== undefined ? Number(timeoutSeconds) : 30;
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    throw new Error("--timeout-seconds must be a positive number");
+  }
+  const timeoutMs = Math.round(timeout * 1000);
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const raw = fs.readFileSync(resultFile, "utf8");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && String(parsed.id) === String(id)) {
+            return { statusCode: 200, body: parsed };
+          }
+        }
+      } catch (errReadResult) {
+      }
+    }
+    await sleep(500);
+  }
+
+  throw new Error(
+    `Timed out waiting for UXP command response: ${command}. Ensure the Premiere Bridge UXP panel is loaded.`
+  );
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
@@ -625,63 +678,46 @@ async function main() {
   }
 
   if (command === "transcript-json") {
-    const baseDir = path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
-    const ipcDir = path.join(baseDir, "uxp-ipc");
-    const commandFile = path.join(ipcDir, "command.json");
-    const resultFile = path.join(ipcDir, "result.json");
+    const result = await sendUxpIpcCommand(config, "transcriptJSON", {}, args["timeout-seconds"]);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
 
-    if (!config.token) {
-      throw new Error("Missing token in config; open the CEP panel at least once to generate it.");
+  if (command === "export-sequence-audio") {
+    const transport = args.transport ? String(args.transport).toLowerCase() : null;
+    if (transport !== "cep" && transport !== "uxp") {
+      throw new Error("Provide --transport cep|uxp for export-sequence-audio");
     }
 
-    fs.mkdirSync(ipcDir, { recursive: true });
-
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const commandPayload = {
-      id,
-      command: "transcriptJSON",
-      payload: {},
-      token: config.token
-    };
-    fs.writeFileSync(commandFile, JSON.stringify(commandPayload, null, 2));
-
-    const timeoutSeconds = args["timeout-seconds"] !== undefined ? Number(args["timeout-seconds"]) : 30;
-    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-      throw new Error("--timeout-seconds must be a positive number");
+    const payload = {};
+    if (args.output !== undefined) {
+      payload.outputPath = path.resolve(String(args.output));
     }
-    const timeoutMs = Math.round(timeoutSeconds * 1000);
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < timeoutMs) {
-      if (fs.existsSync(resultFile)) {
-        try {
-          const raw = fs.readFileSync(resultFile, "utf8");
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed && String(parsed.id) === String(id)) {
-              console.log(
-                JSON.stringify(
-                  {
-                    statusCode: 200,
-                    body: parsed
-                  },
-                  null,
-                  2
-                )
-              );
-              return;
-            }
-          }
-        } catch (errReadResult) {
-          // Keep polling; the file may be mid-write.
-        }
+    if (args.preset !== undefined) {
+      payload.presetPath = path.resolve(String(args.preset));
+    }
+    if (args["timeout-seconds"] !== undefined) {
+      const timeout = Number(args["timeout-seconds"]);
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        throw new Error("--timeout-seconds must be a positive number");
       }
-      await sleep(500);
+      payload.timeoutSeconds = timeout;
     }
 
-    throw new Error(
-      "Timed out waiting for UXP transcript response. Ensure the Premiere Bridge UXP panel is loaded."
+    if (transport === "cep") {
+      const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    const result = await sendUxpIpcCommand(
+      config,
+      "exportSequenceAudio",
+      attachDryRun(payload, dryRun),
+      args["timeout-seconds"] !== undefined ? args["timeout-seconds"] : 60
     );
+    console.log(JSON.stringify(result, null, 2));
+    return;
   }
 
   if (command === "menu-command-id") {

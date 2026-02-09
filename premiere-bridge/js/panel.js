@@ -213,6 +213,108 @@
     configPathEl.textContent = `Config: ${configPath()}`;
   }
 
+  function slugifyName(value) {
+    const text = value ? String(value) : "active-sequence";
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "active-sequence";
+  }
+
+  function timestampForFilename() {
+    const d = new Date();
+    function pad2(n) {
+      return String(n).padStart(2, "0");
+    }
+    return [
+      d.getFullYear(),
+      pad2(d.getMonth() + 1),
+      pad2(d.getDate()),
+      "-",
+      pad2(d.getHours()),
+      pad2(d.getMinutes()),
+      pad2(d.getSeconds())
+    ].join("");
+  }
+
+  function resolveAudioPresetPath(payload) {
+    const rawCandidates = [
+      payload && payload.presetPath,
+      config && config.audioExportPreset,
+      config && config.defaultAudioExportPreset,
+      config && config.exportPresetPath,
+      path.join(__dirname, "..", "presets", "sequence-audio-wav-48k.epr"),
+      path.join(__dirname, "..", "presets", "wav-48k-pcm.epr"),
+      path.join(__dirname, "..", "presets", "wav-48k.epr")
+    ];
+    const candidates = [];
+    for (const raw of rawCandidates) {
+      if (!raw) {
+        continue;
+      }
+      const resolved = path.resolve(String(raw));
+      if (!candidates.includes(resolved)) {
+        candidates.push(resolved);
+      }
+    }
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          return { ok: true, presetPath: candidate, candidates };
+        }
+      } catch (errExists) {
+      }
+    }
+    return { ok: false, presetPath: null, candidates };
+  }
+
+  async function prepareAudioExportPayload(payload) {
+    const clean = payload && typeof payload === "object" ? payload : {};
+    let sequenceName = "active-sequence";
+    try {
+      const info = await evalExtendScript("getSequenceInfo", {});
+      if (info && info.ok && info.data && info.data.name) {
+        sequenceName = String(info.data.name);
+      }
+    } catch (errInfo) {
+    }
+
+    const outputFromPayload = clean.outputPath ? path.resolve(String(clean.outputPath)) : null;
+    const outputPathBase = outputFromPayload || path.join(
+      configDir(),
+      "tmp",
+      `${slugifyName(sequenceName)}-${timestampForFilename()}.wav`
+    );
+    const outputPath = /\.wav$/i.test(outputPathBase) ? outputPathBase : `${outputPathBase}.wav`;
+
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    } catch (errDir) {
+      return { ok: false, error: `Failed to create output directory: ${errDir.message}` };
+    }
+
+    const presetResolved = resolveAudioPresetPath(clean);
+    if (!presetResolved.ok || !presetResolved.presetPath) {
+      return {
+        ok: false,
+        error: "No audio export preset found. Provide --preset or set config.audioExportPreset/defaultAudioExportPreset.",
+        data: { candidates: presetResolved.candidates || [] }
+      };
+    }
+
+    return {
+      ok: true,
+      payload: {
+        outputPath,
+        presetPath: presetResolved.presetPath,
+        workAreaType: clean.workAreaType !== undefined ? Number(clean.workAreaType) : 0
+      },
+      sequenceName,
+      presetCandidates: presetResolved.candidates || []
+    };
+  }
+
   function buildScript(fn, payload) {
     const json = JSON.stringify(payload || {});
     const escaped = JSON.stringify(json);
@@ -243,6 +345,7 @@
   const MUTATING_COMMANDS = new Set([
     "reloadProject",
     "saveProject",
+    "exportSequenceAudio",
     "duplicateSequence",
     "openSequence",
     "addMarkers",
@@ -311,6 +414,70 @@
       } catch (err) {
         return { ok: false, error: `Failed to read marker file: ${err.message}` };
       }
+    }
+    if (command === "exportSequenceAudio") {
+      const prepared = await prepareAudioExportPayload(cleanPayload);
+      if (!prepared.ok) {
+        return { ok: false, error: prepared.error, data: prepared.data || null };
+      }
+      if (dryRun) {
+        return {
+          ok: true,
+          data: {
+            dryRun: true,
+            skipped: true,
+            transport: "cep",
+            sequence: { name: prepared.sequenceName },
+            outputPath: prepared.payload.outputPath,
+            presetPath: prepared.payload.presetPath,
+            workAreaType: prepared.payload.workAreaType,
+            presetCandidates: prepared.presetCandidates
+          }
+        };
+      }
+
+      const exportResult = await evalExtendScript("exportSequenceAudio", prepared.payload);
+      if (!exportResult || !exportResult.ok) {
+        return exportResult || { ok: false, error: "Unknown export failure" };
+      }
+
+      const outputPath = exportResult.data && exportResult.data.outputPath
+        ? String(exportResult.data.outputPath)
+        : prepared.payload.outputPath;
+      let exists = false;
+      let bytes = 0;
+      try {
+        if (fs.existsSync(outputPath)) {
+          exists = true;
+          bytes = fs.statSync(outputPath).size || 0;
+        }
+      } catch (errStat) {
+      }
+      if (!exists || bytes <= 0) {
+        return {
+          ok: false,
+          error: "Audio export finished but output file is missing or empty.",
+          data: {
+            transport: "cep",
+            sequence: { name: prepared.sequenceName },
+            outputPath,
+            presetPath: prepared.payload.presetPath
+          }
+        };
+      }
+      return {
+        ok: true,
+        data: Object.assign({}, exportResult.data || {}, {
+          transport: "cep",
+          sequence: (exportResult.data && exportResult.data.sequence) || { name: prepared.sequenceName },
+          outputPath,
+          presetPath: prepared.payload.presetPath,
+          file: {
+            exists: true,
+            bytes
+          }
+        })
+      };
     }
     if (dryRun && MUTATING_COMMANDS.has(command)) {
       return {
