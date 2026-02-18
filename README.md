@@ -34,6 +34,8 @@ The CLI reads the config file above for the port and token.
 ./cli/premiere-bridge.js ping
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
+./cli/premiere-bridge.js export-sequence-audio --transport cep --preset /ABS/PATH/audio-48k.epr
+./cli/premiere-bridge.js export-sequence-audio --transport uxp --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js duplicate-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js list-sequences
 ./cli/premiere-bridge.js open-sequence --name "Rough Cut"
@@ -78,6 +80,7 @@ Color indices:
 - `ping`
 - `reload-project`
 - `save-project`
+- `export-sequence-audio` (requires `--transport cep|uxp`)
 - `duplicate-sequence`
 - `list-sequences`
 - `open-sequence`
@@ -130,6 +133,47 @@ The UXP panel and CLI communicate via:
 
 If the command times out, ensure the UXP panel is open and the active sequence
 has a transcript available in the Text panel.
+
+## Sequence Audio Export (CEP + UXP)
+
+Export the active sequence audio to a WAV file for downstream transcription.
+
+```bash
+./cli/premiere-bridge.js export-sequence-audio \
+  --transport cep \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+```bash
+./cli/premiere-bridge.js export-sequence-audio \
+  --transport uxp \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+Optional args:
+- `--output /ABS/PATH/output.wav`
+- `--timeout-seconds N`
+- `--dry-run`
+
+Defaults:
+- Output path defaults to:
+  `~/Library/Application Support/PremiereBridge/tmp/<sequence-slug>-<YYYYMMDD-HHmmss>.wav`
+- Preset resolution order:
+  1. `--preset`
+  2. config `audioExportPreset`
+  3. config `defaultAudioExportPreset`
+  4. built-in preset candidates (if present)
+  5. fail with explicit error
+
+Expected response fields include:
+- `transport`
+- `sequence.name`
+- `outputPath`
+- `presetPath`
+- `method`
+- `file.exists`
+- `file.bytes`
+- `durationSeconds` (if available)
 
 ## Rough Cut Command Set
 

@@ -2249,6 +2249,114 @@ PremiereBridge.saveProject = function (jsonStr) {
   }
 };
 
+PremiereBridge.exportSequenceAudio = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var project = app.project;
+    if (!project) {
+      return PremiereBridge._err("No project loaded");
+    }
+    var sequence = project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var outputPath = payload.outputPath ? String(payload.outputPath) : null;
+    if (!outputPath) {
+      return PremiereBridge._err("Missing outputPath");
+    }
+    var presetPath = payload.presetPath ? String(payload.presetPath) : null;
+    if (!presetPath) {
+      return PremiereBridge._err("Missing presetPath");
+    }
+
+    var workAreaType = payload.workAreaType !== undefined ? Number(payload.workAreaType) : 0;
+    if (isNaN(workAreaType) || workAreaType < 0) {
+      workAreaType = 0;
+    }
+
+    var outputFile = new File(outputPath);
+    var outputDir = outputFile.parent;
+    if (!outputDir || (!outputDir.exists && !outputDir.create())) {
+      return PremiereBridge._err("Failed to create output directory", { outputPath: outputPath });
+    }
+
+    var presetFile = new File(presetPath);
+    if (!presetFile.exists) {
+      return PremiereBridge._err("Preset file not found", {
+        presetPath: presetPath
+      });
+    }
+
+    if (!sequence.exportAsMediaDirect) {
+      return PremiereBridge._err("sequence.exportAsMediaDirect is unavailable in this CEP runtime");
+    }
+
+    var methodsTried = [];
+    var method = null;
+    var rawResult = null;
+    var errors = [];
+
+    try {
+      rawResult = sequence.exportAsMediaDirect(outputFile.fsName, presetFile.fsName, workAreaType);
+      methodsTried.push("sequence.exportAsMediaDirect(fsName, fsName, workAreaType)");
+      method = "sequence.exportAsMediaDirect(fsName, fsName, workAreaType)";
+    } catch (errFsName) {
+      errors.push(String(errFsName));
+    }
+
+    if (!method) {
+      try {
+        rawResult = sequence.exportAsMediaDirect(outputPath, presetPath, workAreaType);
+        methodsTried.push("sequence.exportAsMediaDirect(outputPath, presetPath, workAreaType)");
+        method = "sequence.exportAsMediaDirect(outputPath, presetPath, workAreaType)";
+      } catch (errRawPath) {
+        errors.push(String(errRawPath));
+      }
+    }
+
+    if (!method) {
+      return PremiereBridge._err("Failed to export active sequence audio", {
+        outputPath: outputFile.fsName,
+        presetPath: presetFile.fsName,
+        workAreaType: workAreaType,
+        methodsTried: methodsTried,
+        errors: errors
+      });
+    }
+
+    var exists = false;
+    var bytes = null;
+    try {
+      exists = outputFile.exists;
+      if (exists && outputFile.length !== undefined && outputFile.length !== null) {
+        bytes = Number(outputFile.length);
+      }
+    } catch (errStat) {
+    }
+
+    return PremiereBridge._ok({
+      transport: "cep",
+      sequence: {
+        name: sequence.name ? String(sequence.name) : null
+      },
+      outputPath: outputFile.fsName,
+      presetPath: presetFile.fsName,
+      method: method,
+      workAreaType: workAreaType,
+      rawResult: rawResult,
+      methodsTried: methodsTried,
+      file: {
+        exists: exists,
+        bytes: bytes
+      },
+      durationSeconds: null
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge._sequenceList = function () {
   var list = [];
   try {
