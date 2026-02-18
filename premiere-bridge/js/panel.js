@@ -244,6 +244,8 @@
       config && config.audioExportPreset,
       config && config.defaultAudioExportPreset,
       config && config.exportPresetPath,
+      path.join(configDir(), "presets", "premiere-bridge-audio-wav-48k.epr"),
+      path.join(configDir(), "presets", "sequence-audio-wav-48k.epr"),
       path.join(__dirname, "..", "presets", "sequence-audio-wav-48k.epr"),
       path.join(__dirname, "..", "presets", "wav-48k-pcm.epr"),
       path.join(__dirname, "..", "presets", "wav-48k.epr")

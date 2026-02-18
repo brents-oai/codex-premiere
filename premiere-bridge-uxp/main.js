@@ -226,9 +226,20 @@ async function fileInfo(nativePath) {
   }
   try {
     const entry = await localFileSystem.getEntryWithUrl(fileUrl(nativePath));
-    const text = await entry.read();
     info.exists = true;
-    info.bytes = text ? text.length : 0;
+    if (entry && typeof entry.getMetadata === "function") {
+      try {
+        const metadata = await entry.getMetadata();
+        if (metadata && metadata.size !== undefined && metadata.size !== null) {
+          info.bytes = Number(metadata.size) || 0;
+          return info;
+        }
+      } catch (errMeta) {
+      }
+    }
+    if (entry && entry.size !== undefined && entry.size !== null) {
+      info.bytes = Number(entry.size) || 0;
+    }
   } catch (errRead) {
   }
   return info;
@@ -297,6 +308,30 @@ async function readSequenceId(seq) {
 }
 
 function exportPresetCandidates(payload, cfg) {
+  function normalizeCandidatePath(raw) {
+    if (!raw) {
+      return null;
+    }
+    const text = String(raw).trim();
+    if (!text) {
+      return null;
+    }
+    // UXP path.resolve may prefix absolute paths with "plugin:"; convert back.
+    if (text.indexOf("plugin:/") === 0) {
+      return decodeURI(text.slice("plugin:".length));
+    }
+    if (text.indexOf("file://") === 0) {
+      return decodeURI(text.replace(/^file:\/\//, ""));
+    }
+    if (text[0] === "/") {
+      return text;
+    }
+    if (pathModule && pathModule.resolve) {
+      return pathModule.resolve(text);
+    }
+    return text;
+  }
+
   const candidates = [];
   const rawCandidates = [
     payload && payload.presetPath,
@@ -304,6 +339,11 @@ function exportPresetCandidates(payload, cfg) {
     cfg && cfg.defaultAudioExportPreset,
     cfg && cfg.exportPresetPath
   ];
+  const homeDir = osModule && osModule.homedir ? osModule.homedir() : null;
+  if (homeDir) {
+    rawCandidates.push(joinPath(homeDir, "Library/Application Support/PremiereBridge/presets/premiere-bridge-audio-wav-48k.epr"));
+    rawCandidates.push(joinPath(homeDir, "Library/Application Support/PremiereBridge/presets/sequence-audio-wav-48k.epr"));
+  }
   if (typeof __dirname !== "undefined") {
     rawCandidates.push(joinPath(__dirname, "presets/sequence-audio-wav-48k.epr"));
     rawCandidates.push(joinPath(__dirname, "presets/wav-48k-pcm.epr"));
@@ -313,7 +353,10 @@ function exportPresetCandidates(payload, cfg) {
     if (!raw) {
       continue;
     }
-    const resolved = pathModule && pathModule.resolve ? pathModule.resolve(String(raw)) : String(raw);
+    const resolved = normalizeCandidatePath(raw);
+    if (!resolved) {
+      continue;
+    }
     if (!candidates.includes(resolved)) {
       candidates.push(resolved);
     }
@@ -413,31 +456,107 @@ async function exportSequenceAudio(payload) {
 
   let method = null;
   let rawResult = null;
+  let pendingExportPromise = null;
+
+  function tryStartExport(label, invoke) {
+    attempts.push(label);
+    try {
+      const maybe = invoke();
+      rawResult = maybe === undefined ? null : maybe;
+      if (maybe && typeof maybe.then === "function") {
+        pendingExportPromise = maybe.catch((errPending) => {
+          errors.push(
+            `${label} (async): ${String(errPending && errPending.message ? errPending.message : errPending)}`
+          );
+          return null;
+        });
+      }
+      method = label;
+      return true;
+    } catch (errStart) {
+      errors.push(`${label}: ${String(errStart && errStart.message ? errStart.message : errStart)}`);
+      return false;
+    }
+  }
 
   if (!method && typeof sequence.exportAsMediaDirect === "function") {
-    const ok = await attempt("sequence.exportAsMediaDirect(outputPath,presetPath,workAreaType)", async () => {
-      rawResult = await sequence.exportAsMediaDirect(outputPath, presetPath, normalizedWorkAreaType);
-    });
-    if (ok) {
-      method = "sequence.exportAsMediaDirect(outputPath,presetPath,workAreaType)";
-    }
+    tryStartExport("sequence.exportAsMediaDirect(outputPath,presetPath,workAreaType)", () =>
+      sequence.exportAsMediaDirect(outputPath, presetPath, normalizedWorkAreaType)
+    );
   }
 
   if (!method && typeof sequence.exportAsMedia === "function") {
-    const ok = await attempt("sequence.exportAsMedia(outputPath,presetPath,workAreaType)", async () => {
-      rawResult = await sequence.exportAsMedia(outputPath, presetPath, normalizedWorkAreaType);
-    });
-    if (ok) {
-      method = "sequence.exportAsMedia(outputPath,presetPath,workAreaType)";
-    }
+    tryStartExport("sequence.exportAsMedia(outputPath,presetPath,workAreaType)", () =>
+      sequence.exportAsMedia(outputPath, presetPath, normalizedWorkAreaType)
+    );
   }
 
   if (!method && typeof project.exportSequenceAsMediaDirect === "function") {
-    const ok = await attempt("project.exportSequenceAsMediaDirect(sequence,outputPath,presetPath,workAreaType)", async () => {
-      rawResult = await project.exportSequenceAsMediaDirect(sequence, outputPath, presetPath, normalizedWorkAreaType);
+    tryStartExport("project.exportSequenceAsMediaDirect(sequence,outputPath,presetPath,workAreaType)", () =>
+      project.exportSequenceAsMediaDirect(sequence, outputPath, presetPath, normalizedWorkAreaType)
+    );
+  }
+
+  if (!method && premiere && premiere.EncoderManager && typeof premiere.EncoderManager.getManager === "function") {
+    const constants = (premiere && (premiere.Constants || premiere.constants)) || {};
+    const exportTypes = [];
+    if (constants.ExportType) {
+      const c = constants.ExportType;
+      exportTypes.push(c.IMMEDIATELY, c.IMMEDIATE, c.EXPORT_IMMEDIATELY, c.ExportImmediately);
+      exportTypes.push(c.QUEUE_IN_AME, c.QUEUE, c.QUEUE_TO_AME);
+      try {
+        Object.keys(c).forEach((k) => exportTypes.push(c[k]));
+      } catch (errEnumKeys) {
+      }
+    }
+    // Fallback enum guesses if constants are not exposed in this runtime.
+    exportTypes.push(0, 1, 2);
+    const normalizedExportTypes = exportTypes.filter((v, idx, arr) => v !== undefined && v !== null && arr.indexOf(v) === idx);
+
+    let manager = null;
+    const managerReady = await attempt("EncoderManager.getManager()", async () => {
+      manager = await premiere.EncoderManager.getManager();
+      if (!manager) {
+        throw new Error("EncoderManager.getManager() returned null");
+      }
     });
-    if (ok) {
-      method = "project.exportSequenceAsMediaDirect(sequence,outputPath,presetPath,workAreaType)";
+
+    if (managerReady && manager && typeof manager.exportSequence === "function") {
+      for (const exportType of normalizedExportTypes) {
+        if (method) {
+          break;
+        }
+        const attemptSpecs = [
+          {
+            label: `EncoderManager.exportSequence(sequence,${String(exportType)},outputPath,presetPath,true)`,
+            args: [sequence, exportType, outputPath, presetPath, true]
+          },
+          {
+            label: `EncoderManager.exportSequence(sequence,${String(exportType)},outputPath,presetPath,false)`,
+            args: [sequence, exportType, outputPath, presetPath, false]
+          },
+          {
+            label: `EncoderManager.exportSequence(sequence,outputPath,presetPath,${String(exportType)},true)`,
+            args: [sequence, outputPath, presetPath, exportType, true]
+          },
+          {
+            label: `EncoderManager.exportSequence(sequence,outputPath,presetPath,${String(exportType)},false)`,
+            args: [sequence, outputPath, presetPath, exportType, false]
+          },
+          {
+            label: `EncoderManager.exportSequence(sequence,${String(exportType)},outputPath,presetPath)`,
+            args: [sequence, exportType, outputPath, presetPath]
+          }
+        ];
+        for (const spec of attemptSpecs) {
+          if (method) {
+            break;
+          }
+          tryStartExport(spec.label, () => manager.exportSequence.apply(manager, spec.args));
+        }
+      }
+    } else if (managerReady && manager && typeof manager.exportSequence === "undefined") {
+      errors.push("EncoderManager available but exportSequence is undefined");
     }
   }
 
@@ -448,6 +567,13 @@ async function exportSequenceAudio(payload) {
   }
 
   const file = await waitForNonEmptyFile(outputPath, timeoutMs);
+  if (!file.exists && pendingExportPromise) {
+    // Give any pending promise one final chance without blocking indefinitely.
+    await Promise.race([
+      pendingExportPromise,
+      new Promise((resolve) => setTimeout(resolve, 1000))
+    ]);
+  }
   if (!file.exists || Number(file.bytes || 0) <= 0) {
     throw new Error(
       `Export command finished but output file is missing or empty at ${outputPath}. Method: ${method}`
