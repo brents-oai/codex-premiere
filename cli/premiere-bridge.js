@@ -13,6 +13,7 @@ Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
+  premiere-bridge export-sequence-audio [--transport cep|uxp|auto] [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
@@ -737,6 +738,26 @@ async function main() {
       {},
       { timeoutSeconds }
     );
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "export-sequence-audio") {
+    const payload = {};
+    if (args.output !== undefined) {
+      payload.outputPath = path.resolve(String(args.output));
+    }
+    if (args.preset !== undefined) {
+      payload.presetPath = path.resolve(String(args.preset));
+    }
+    if (args["timeout-seconds"] !== undefined) {
+      const timeoutSeconds = Number(args["timeout-seconds"]);
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+        throw new Error("--timeout-seconds must be a positive number");
+      }
+      payload.timeoutSeconds = timeoutSeconds;
+    }
+    const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

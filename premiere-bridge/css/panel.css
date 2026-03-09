@@ -60,18 +60,22 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   line-height: 1.45;
+  min-height: 100vh;
 }
 
 .app {
   padding: 18px;
-  display: flex;
-  flex-direction: column;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
 header h1 {
   margin: 0 0 4px 0;
-  font-size: 20px;
+  font-size: clamp(20px, 2.2vw, 30px);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -79,7 +83,7 @@ header h1 {
 .sub {
   margin: 0;
   color: hsl(var(--muted-foreground));
-  font-size: 12px;
+  font-size: clamp(12px, 1.15vw, 15px);
 }
 
 .card {
@@ -94,7 +98,7 @@ header h1 {
 }
 
 .label {
-  font-size: 11px;
+  font-size: clamp(11px, 1vw, 13px);
   color: hsl(var(--muted-foreground));
   margin-bottom: 8px;
   text-transform: uppercase;
@@ -105,7 +109,7 @@ header h1 {
 .status {
   font-weight: 600;
   margin-top: 6px;
-  font-size: 13px;
+  font-size: clamp(13px, 1.2vw, 16px);
 }
 
 .status.online {
@@ -120,6 +124,7 @@ header h1 {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: nowrap;
 }
 
 .row.between {
@@ -131,8 +136,15 @@ header h1 {
 }
 
 .buttons {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(88px, 1fr));
   gap: 8px;
+  justify-content: flex-end;
+  width: min(340px, 100%);
+}
+
+.buttons button {
+  width: 100%;
 }
 
 .field {
@@ -141,7 +153,7 @@ header h1 {
 
 .field label {
   display: block;
-  font-size: 12px;
+  font-size: clamp(12px, 1vw, 14px);
   color: hsl(var(--muted-foreground));
   margin-bottom: 6px;
   font-weight: 500;
@@ -149,7 +161,8 @@ header h1 {
 
 input {
   width: 100%;
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 10px 12px;
   border-radius: calc(var(--radius) - 2px);
   border: 1px solid hsl(var(--input));
   background: hsl(var(--secondary));
@@ -172,7 +185,7 @@ input:focus-visible {
 
 .token-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
@@ -180,10 +193,10 @@ button {
   border: 1px solid hsl(var(--border));
   background: hsl(var(--secondary));
   color: hsl(var(--secondary-foreground));
-  padding: 7px 12px;
+  padding: 9px 14px;
   border-radius: calc(var(--radius) - 2px);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: clamp(12.5px, 1.05vw, 14px);
   font-weight: 600;
   transition:
     transform 80ms ease,
@@ -224,9 +237,25 @@ button:disabled {
 }
 
 .hint {
-  font-size: 11px;
+  font-size: clamp(11px, 0.95vw, 13px);
   color: hsl(var(--muted-foreground));
-  max-width: 240px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.save-row {
+  align-items: flex-start;
+}
+
+.save-row .hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.save-row button {
+  flex: 0 0 auto;
 }
 
 pre {
@@ -235,10 +264,96 @@ pre {
   background: hsl(var(--secondary));
   border: 1px solid hsl(var(--border));
   border-radius: calc(var(--radius) - 2px);
-  height: 160px;
+  min-height: 160px;
+  height: clamp(170px, 24vh, 360px);
   overflow: auto;
   white-space: pre;
-  font-size: 11.5px;
+  font-size: clamp(11.5px, 0.95vw, 13px);
   line-height: 1.5;
   color: hsl(var(--foreground) / 0.92);
+}
+
+header {
+  grid-column: 1 / -1;
+}
+
+.card-logs {
+  min-height: 0;
+}
+
+@media (min-width: 980px) {
+  .app {
+    grid-template-columns: minmax(360px, 1.1fr) minmax(340px, 0.9fr);
+    align-items: start;
+  }
+
+  .card-status,
+  .card-connection {
+    grid-column: 1;
+  }
+
+  .card-logs,
+  .card-quick {
+    grid-column: 2;
+  }
+
+  .card-logs {
+    position: sticky;
+    top: 14px;
+  }
+}
+
+@media (max-width: 700px) {
+  .app {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .card {
+    padding: 10px;
+  }
+
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .row.between {
+    align-items: center;
+  }
+
+  .token-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .buttons,
+  .row.gap {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .buttons button,
+  .row.gap button {
+    width: 100%;
+  }
+
+  .save-row {
+    align-items: flex-start;
+  }
+
+  .save-row button {
+    margin-top: 2px;
+  }
+}
+
+@media (max-width: 480px) {
+  .buttons,
+  .row.gap,
+  .token-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .token-row button {
+    width: 100%;
+  }
 }
