@@ -39,6 +39,8 @@ Config:
 
 Global:
   --dry-run  Validate and compute without writing changes to Premiere.
+  --transport cep|uxp|auto  Choose transport (default: config or auto).
+  --timeout-seconds N  Timeout for UXP IPC transport (default: 60).
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -108,6 +110,17 @@ function loadConfig(options) {
   if (options.token) {
     config.token = options.token;
   }
+  if (options.transport) {
+    config.transport = String(options.transport).toLowerCase();
+  }
+  if (!config.transport) {
+    config.transport = "auto";
+  }
+
+  const timeoutRaw =
+    options["timeout-seconds"] !== undefined ? options["timeout-seconds"] : config.uxpTimeoutSeconds;
+  const timeout = Number(timeoutRaw);
+  config.uxpTimeoutSeconds = Number.isFinite(timeout) && timeout > 0 ? timeout : 60;
 
   return config;
 }
@@ -496,7 +509,22 @@ function computeGaps(included, bounds) {
   return gaps.filter((gap) => gap.endTicks > gap.startTicks);
 }
 
-function sendCommand(config, cmd, payload) {
+function uxpPaths() {
+  const baseDir = path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
+  const ipcDir = path.join(baseDir, "uxp-ipc");
+  return {
+    baseDir,
+    ipcDir,
+    commandPath: path.join(ipcDir, "command.json"),
+    resultPath: path.join(ipcDir, "result.json")
+  };
+}
+
+function commandId() {
+  return `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function sendCommandCep(config, cmd, payload) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ cmd, payload });
     const req = http.request(
@@ -528,6 +556,80 @@ function sendCommand(config, cmd, payload) {
     req.write(body);
     req.end();
   });
+}
+
+async function sendCommandUxp(config, cmd, payload, options) {
+  const paths = uxpPaths();
+  fs.mkdirSync(paths.ipcDir, { recursive: true });
+  const id = commandId();
+  const command = {
+    id,
+    command: cmd,
+    payload: payload || {},
+    token: config.token,
+    createdAt: new Date().toISOString()
+  };
+  fs.writeFileSync(paths.commandPath, JSON.stringify(command, null, 2));
+
+  const timeoutSeconds = options && options.timeoutSeconds ? options.timeoutSeconds : config.uxpTimeoutSeconds;
+  const timeoutMs = Math.max(1000, Math.round(Number(timeoutSeconds) * 1000));
+  const start = Date.now();
+  let lastError = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (fs.existsSync(paths.resultPath)) {
+        const raw = fs.readFileSync(paths.resultPath, "utf8");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.id === id) {
+            return { statusCode: 200, body: parsed };
+          }
+        }
+      }
+    } catch (errRead) {
+      lastError = errRead;
+    }
+    await sleep(150);
+  }
+  const detail = lastError ? ` Last error: ${lastError.message}` : "";
+  throw new Error(
+    `Timed out waiting for UXP response (${timeoutSeconds}s). Ensure the UXP panel is running.${detail}`
+  );
+}
+
+function isRetryableCepError(err) {
+  if (!err) {
+    return false;
+  }
+  const code = err.code || err.errno || "";
+  return [
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EHOSTUNREACH",
+    "ENOTFOUND",
+    "ETIMEDOUT"
+  ].includes(String(code));
+}
+
+async function sendCommand(config, cmd, payload) {
+  const transport = String(config.transport || "auto").toLowerCase();
+  if (!config.token) {
+    throw new Error("Missing auth token. Open the UXP panel and save the config first.");
+  }
+  if (transport === "uxp") {
+    return sendCommandUxp(config, cmd, payload);
+  }
+  if (transport === "cep") {
+    return sendCommandCep(config, cmd, payload);
+  }
+  try {
+    return await sendCommandCep(config, cmd, payload);
+  } catch (errCep) {
+    if (!isRetryableCepError(errCep)) {
+      throw errCep;
+    }
+    return sendCommandUxp(config, cmd, payload);
+  }
 }
 
 async function main() {
@@ -625,63 +727,18 @@ async function main() {
   }
 
   if (command === "transcript-json") {
-    const baseDir = path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
-    const ipcDir = path.join(baseDir, "uxp-ipc");
-    const commandFile = path.join(ipcDir, "command.json");
-    const resultFile = path.join(ipcDir, "result.json");
-
-    if (!config.token) {
-      throw new Error("Missing token in config; open the CEP panel at least once to generate it.");
-    }
-
-    fs.mkdirSync(ipcDir, { recursive: true });
-
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const commandPayload = {
-      id,
-      command: "transcriptJSON",
-      payload: {},
-      token: config.token
-    };
-    fs.writeFileSync(commandFile, JSON.stringify(commandPayload, null, 2));
-
     const timeoutSeconds = args["timeout-seconds"] !== undefined ? Number(args["timeout-seconds"]) : 30;
     if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
       throw new Error("--timeout-seconds must be a positive number");
     }
-    const timeoutMs = Math.round(timeoutSeconds * 1000);
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < timeoutMs) {
-      if (fs.existsSync(resultFile)) {
-        try {
-          const raw = fs.readFileSync(resultFile, "utf8");
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed && String(parsed.id) === String(id)) {
-              console.log(
-                JSON.stringify(
-                  {
-                    statusCode: 200,
-                    body: parsed
-                  },
-                  null,
-                  2
-                )
-              );
-              return;
-            }
-          }
-        } catch (errReadResult) {
-          // Keep polling; the file may be mid-write.
-        }
-      }
-      await sleep(500);
-    }
-
-    throw new Error(
-      "Timed out waiting for UXP transcript response. Ensure the Premiere Bridge UXP panel is loaded."
+    const result = await sendCommandUxp(
+      config,
+      "transcriptJSON",
+      {},
+      { timeoutSeconds }
     );
+    console.log(JSON.stringify(result, null, 2));
+    return;
   }
 
   if (command === "menu-command-id") {
