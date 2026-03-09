@@ -13,7 +13,7 @@ Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
-  premiere-bridge export-sequence-audio --transport cep|uxp [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
+  premiere-bridge export-sequence-audio [--transport cep|uxp|auto] [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
@@ -40,6 +40,8 @@ Config:
 
 Global:
   --dry-run  Validate and compute without writing changes to Premiere.
+  --transport cep|uxp|auto  Choose transport (default: config or auto).
+  --timeout-seconds N  Timeout for UXP IPC transport (default: 60).
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -109,6 +111,17 @@ function loadConfig(options) {
   if (options.token) {
     config.token = options.token;
   }
+  if (options.transport) {
+    config.transport = String(options.transport).toLowerCase();
+  }
+  if (!config.transport) {
+    config.transport = "auto";
+  }
+
+  const timeoutRaw =
+    options["timeout-seconds"] !== undefined ? options["timeout-seconds"] : config.uxpTimeoutSeconds;
+  const timeout = Number(timeoutRaw);
+  config.uxpTimeoutSeconds = Number.isFinite(timeout) && timeout > 0 ? timeout : 60;
 
   return config;
 }
@@ -497,7 +510,22 @@ function computeGaps(included, bounds) {
   return gaps.filter((gap) => gap.endTicks > gap.startTicks);
 }
 
-function sendCommand(config, cmd, payload) {
+function uxpPaths() {
+  const baseDir = path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
+  const ipcDir = path.join(baseDir, "uxp-ipc");
+  return {
+    baseDir,
+    ipcDir,
+    commandPath: path.join(ipcDir, "command.json"),
+    resultPath: path.join(ipcDir, "result.json")
+  };
+}
+
+function commandId() {
+  return `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function sendCommandCep(config, cmd, payload) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ cmd, payload });
     const req = http.request(
@@ -531,56 +559,78 @@ function sendCommand(config, cmd, payload) {
   });
 }
 
-function appSupportDir() {
-  return path.join(os.homedir(), "Library", "Application Support", "PremiereBridge");
-}
-
-async function sendUxpIpcCommand(config, command, payload, timeoutSeconds) {
-  const ipcDir = path.join(appSupportDir(), "uxp-ipc");
-  const commandFile = path.join(ipcDir, "command.json");
-  const resultFile = path.join(ipcDir, "result.json");
-
-  if (!config.token) {
-    throw new Error("Missing token in config; open the CEP panel at least once to generate it.");
-  }
-
-  fs.mkdirSync(ipcDir, { recursive: true });
-
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const commandPayload = {
+async function sendCommandUxp(config, cmd, payload, options) {
+  const paths = uxpPaths();
+  fs.mkdirSync(paths.ipcDir, { recursive: true });
+  const id = commandId();
+  const command = {
     id,
-    command,
+    command: cmd,
     payload: payload || {},
-    token: config.token
+    token: config.token,
+    createdAt: new Date().toISOString()
   };
-  fs.writeFileSync(commandFile, JSON.stringify(commandPayload, null, 2));
+  fs.writeFileSync(paths.commandPath, JSON.stringify(command, null, 2));
 
-  const timeout = timeoutSeconds !== undefined ? Number(timeoutSeconds) : 30;
-  if (!Number.isFinite(timeout) || timeout <= 0) {
-    throw new Error("--timeout-seconds must be a positive number");
-  }
-  const timeoutMs = Math.round(timeout * 1000);
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    if (fs.existsSync(resultFile)) {
-      try {
-        const raw = fs.readFileSync(resultFile, "utf8");
+  const timeoutSeconds = options && options.timeoutSeconds ? options.timeoutSeconds : config.uxpTimeoutSeconds;
+  const timeoutMs = Math.max(1000, Math.round(Number(timeoutSeconds) * 1000));
+  const start = Date.now();
+  let lastError = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (fs.existsSync(paths.resultPath)) {
+        const raw = fs.readFileSync(paths.resultPath, "utf8");
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (parsed && String(parsed.id) === String(id)) {
+          if (parsed && parsed.id === id) {
             return { statusCode: 200, body: parsed };
           }
         }
-      } catch (errReadResult) {
       }
+    } catch (errRead) {
+      lastError = errRead;
     }
-    await sleep(500);
+    await sleep(150);
   }
-
+  const detail = lastError ? ` Last error: ${lastError.message}` : "";
   throw new Error(
-    `Timed out waiting for UXP command response: ${command}. Ensure the Premiere Bridge UXP panel is loaded.`
+    `Timed out waiting for UXP response (${timeoutSeconds}s). Ensure the UXP panel is running.${detail}`
   );
+}
+
+function isRetryableCepError(err) {
+  if (!err) {
+    return false;
+  }
+  const code = err.code || err.errno || "";
+  return [
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EHOSTUNREACH",
+    "ENOTFOUND",
+    "ETIMEDOUT"
+  ].includes(String(code));
+}
+
+async function sendCommand(config, cmd, payload) {
+  const transport = String(config.transport || "auto").toLowerCase();
+  if (!config.token) {
+    throw new Error("Missing auth token. Open the UXP panel and save the config first.");
+  }
+  if (transport === "uxp") {
+    return sendCommandUxp(config, cmd, payload);
+  }
+  if (transport === "cep") {
+    return sendCommandCep(config, cmd, payload);
+  }
+  try {
+    return await sendCommandCep(config, cmd, payload);
+  } catch (errCep) {
+    if (!isRetryableCepError(errCep)) {
+      throw errCep;
+    }
+    return sendCommandUxp(config, cmd, payload);
+  }
 }
 
 async function main() {
@@ -678,17 +728,21 @@ async function main() {
   }
 
   if (command === "transcript-json") {
-    const result = await sendUxpIpcCommand(config, "transcriptJSON", {}, args["timeout-seconds"]);
+    const timeoutSeconds = args["timeout-seconds"] !== undefined ? Number(args["timeout-seconds"]) : 30;
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+      throw new Error("--timeout-seconds must be a positive number");
+    }
+    const result = await sendCommandUxp(
+      config,
+      "transcriptJSON",
+      {},
+      { timeoutSeconds }
+    );
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "export-sequence-audio") {
-    const transport = args.transport ? String(args.transport).toLowerCase() : null;
-    if (transport !== "cep" && transport !== "uxp") {
-      throw new Error("Provide --transport cep|uxp for export-sequence-audio");
-    }
-
     const payload = {};
     if (args.output !== undefined) {
       payload.outputPath = path.resolve(String(args.output));
@@ -697,25 +751,13 @@ async function main() {
       payload.presetPath = path.resolve(String(args.preset));
     }
     if (args["timeout-seconds"] !== undefined) {
-      const timeout = Number(args["timeout-seconds"]);
-      if (!Number.isFinite(timeout) || timeout <= 0) {
+      const timeoutSeconds = Number(args["timeout-seconds"]);
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
         throw new Error("--timeout-seconds must be a positive number");
       }
-      payload.timeoutSeconds = timeout;
+      payload.timeoutSeconds = timeoutSeconds;
     }
-
-    if (transport === "cep") {
-      const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-
-    const result = await sendUxpIpcCommand(
-      config,
-      "exportSequenceAudio",
-      attachDryRun(payload, dryRun),
-      args["timeout-seconds"] !== undefined ? args["timeout-seconds"] : 60
-    );
+    const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
