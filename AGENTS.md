@@ -17,6 +17,7 @@
 - Run repo commands from `/Users/brents/code/codex-premiere`. The CLI reads the shared config plus an optional cwd-local `.premiere-bridge.json`.
 - Search by command name before reading whole files. `premiere-bridge-uxp/main.js` and especially `premiere-bridge/jsx/premiere-bridge.jsx` are large and multi-purpose.
 - If the task is live Premiere control rather than code changes, use the bridge CLI from this repo root.
+- For UXP panel reloads, prefer `./cli/uxp-devtools.sh` from the repo root instead of manual UI interaction in Adobe UXP Developer Tools. The helper bootstraps an ignored Rosetta/x64 Node + Adobe CLI toolchain under `.codex-local/`.
 
 ## Command Surface Rules
 - CLI commands are kebab-case. Internal bridge commands are camelCase.
@@ -67,11 +68,16 @@
 - Live validation loop when Premiere is available:
   - CEP health: `./cli/premiere-bridge.js ping --transport cep`
   - UXP health: `./cli/premiere-bridge.js ping --transport uxp --timeout-seconds 2`
+  - UXP DevTools app connectivity: `./cli/uxp-devtools.sh apps`
+  - UXP panel reload after JS/HTML/CSS changes: `./cli/uxp-devtools.sh reload`
+  - UXP panel load after manifest changes or first-time setup: `./cli/uxp-devtools.sh load`
   - run the specific command you changed with a realistic payload
 - Static checks are not enough for bridge work. A repo edit is incomplete until the installed panel/plugin has been reloaded and the behavior has been confirmed inside Premiere.
 - If live validation is blocked, say so explicitly and include the exact failure string. Common examples in this repo are:
   - `connect ECONNREFUSED 127.0.0.1:17321`
   - `Timed out waiting for UXP response (2s). Ensure the UXP panel is running.`
+- The Adobe UXP CLI published package is currently not arm64-clean on this machine. The local helper works around that by using Rosetta + x64 Node 20.20.1 and by manually running the Adobe helper setup inside the ignored `.codex-local/uxp-devtools-cli/` workspace.
+- Adobe's UXP CLI writes `.uxprc` beside the plugin manifest on `load` and expects `reload` to run from that same plugin directory. `premiere-bridge-uxp/.uxprc` is expected local state and is intentionally gitignored.
 
 ## Shared Paths
 - Shared config: `~/Library/Application Support/PremiereBridge/config.json`

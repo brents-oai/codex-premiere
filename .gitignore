@@ -18,6 +18,8 @@ dist/
 build/
 coverage/
 WORKPLAN.md
+.codex-local/
+premiere-bridge-uxp/.uxprc
 
 # Local transcript exports and rough-cut test artifacts
 transcript*.json
