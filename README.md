@@ -50,6 +50,7 @@ The CLI reads the shared config file above for the port, token, and preferred tr
 ./cli/premiere-bridge.js list-sequences
 ./cli/premiere-bridge.js open-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js find-item --name "C0114.MP4" --contains --limit 5
+./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
 ./cli/premiere-bridge.js sequence-inventory
@@ -63,6 +64,7 @@ The CLI reads the shared config file above for the port, token, and preferred tr
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
 ./cli/premiere-bridge.js toggle-video-track --track V1 --visible false
+./cli/premiere-bridge.js set-track-state --track A1 --kind audio --mute true
 ```
 
 Markers JSON example:
@@ -95,6 +97,7 @@ Color indices:
 - `list-sequences`
 - `open-sequence`
 - `find-item`
+- `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`
 - `sequence-inventory`
@@ -108,6 +111,7 @@ Color indices:
 - `add-markers`
 - `add-markers-file`
 - `toggle-video-track`
+- `set-track-state`
 
 ## UXP Command Bridge (Experimental)
 
