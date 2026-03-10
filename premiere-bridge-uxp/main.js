@@ -18,7 +18,7 @@ try {
 }
 
 const { localFileSystem, types } = storage;
-const { constants } = premiere;
+const constants = (premiere && (premiere.Constants || premiere.constants)) || {};
 
 const DEFAULT_PORT = 17321;
 const TICKS_PER_SECOND = 254016000000;
@@ -1151,8 +1151,73 @@ async function clipSource(trackItem) {
   };
 }
 
+function normalizeTrackItems(items) {
+  if (!items) {
+    return [];
+  }
+  if (Array.isArray(items)) {
+    return items;
+  }
+  if (typeof items.length === "number") {
+    try {
+      return Array.prototype.slice.call(items);
+    } catch (errSlice) {
+    }
+  }
+  if (typeof items.getItemCount === "function" && typeof items.getTrackItemAt === "function") {
+    const out = [];
+    const count = Number(items.getItemCount()) || 0;
+    for (let i = 0; i < count; i += 1) {
+      out.push(items.getTrackItemAt(i));
+    }
+    return out;
+  }
+  return [];
+}
+
+async function getTrackClipItems(track) {
+  if (!track || typeof track.getTrackItems !== "function") {
+    throw new Error("Track does not expose getTrackItems()");
+  }
+
+  const attempts = [];
+  const clipTypeCandidates = [];
+
+  if (constants && constants.TrackItemType && constants.TrackItemType.CLIP !== undefined) {
+    clipTypeCandidates.push(constants.TrackItemType.CLIP);
+  }
+  if (premiere && premiere.TrackItemType && premiere.TrackItemType.CLIP !== undefined) {
+    clipTypeCandidates.push(premiere.TrackItemType.CLIP);
+  }
+
+  for (const clipType of clipTypeCandidates) {
+    if (attempts.indexOf(`typed:${String(clipType)}`) !== -1) {
+      continue;
+    }
+    attempts.push(`typed:${String(clipType)}`);
+    try {
+      return normalizeTrackItems(await track.getTrackItems(clipType, false));
+    } catch (errTyped) {
+    }
+  }
+
+  const fallbackCalls = [
+    { label: "implicit-false", args: [false] },
+    { label: "implicit-empty", args: [] }
+  ];
+  for (const attempt of fallbackCalls) {
+    attempts.push(attempt.label);
+    try {
+      return normalizeTrackItems(await track.getTrackItems.apply(track, attempt.args));
+    } catch (errFallback) {
+    }
+  }
+
+  throw new Error(`Unable to enumerate track items via getTrackItems (${attempts.join(", ")})`);
+}
+
 async function collectTrackItems(context, kind, trackIndex, track) {
-  const items = await track.getTrackItems(constants.TrackItemType.CLIP, false);
+  const items = await getTrackClipItems(track);
   const clips = [];
   const durationContext = {
     timebase: context.timebase,
@@ -1742,13 +1807,13 @@ async function getAllTrackItems(sequence) {
   const videoCount = await sequence.getVideoTrackCount();
   for (let i = 0; i < videoCount; i += 1) {
     const track = await sequence.getVideoTrack(i);
-    const items = await track.getTrackItems(constants.TrackItemType.CLIP, false);
+    const items = await getTrackClipItems(track);
     result.video.push({ index: i, track, items });
   }
   const audioCount = await sequence.getAudioTrackCount();
   for (let i = 0; i < audioCount; i += 1) {
     const track = await sequence.getAudioTrack(i);
-    const items = await track.getTrackItems(constants.TrackItemType.CLIP, false);
+    const items = await getTrackClipItems(track);
     result.audio.push({ index: i, track, items });
   }
   return result;
@@ -1774,7 +1839,7 @@ async function splitTrackItemAtTicks(context, editor, track, trackItem, splitTic
   const deltaTicks = splitTicks - startTicks;
   const newInTicks = inPointTicks + deltaTicks;
 
-  const beforeItems = await track.getTrackItems(constants.TrackItemType.CLIP, false);
+  const beforeItems = await getTrackClipItems(track);
   const beforeSet = new Set(beforeItems);
 
   const cloneAction = editor.createCloneTrackItemAction(
@@ -1789,7 +1854,7 @@ async function splitTrackItemAtTicks(context, editor, track, trackItem, splitTic
     compound.addAction(cloneAction);
   }, "Clone track item for split");
 
-  const afterItems = await track.getTrackItems(constants.TrackItemType.CLIP, false);
+  const afterItems = await getTrackClipItems(track);
   const newItems = afterItems.filter((item) => !beforeSet.has(item));
   const clone = newItems[0];
   if (!clone) {
@@ -1867,7 +1932,7 @@ async function removeRangeWithRipple(context, inTicks, outTicks) {
 
   async function addRangeItems(trackInfos) {
     for (const trackInfo of trackInfos) {
-      const items = await trackInfo.track.getTrackItems(constants.TrackItemType.CLIP, false);
+      const items = await getTrackClipItems(trackInfo.track);
       for (const item of items) {
         const startRelTicks = tickTimeToTicks(await item.getStartTime());
         const endRelTicks = tickTimeToTicks(await item.getEndTime());
