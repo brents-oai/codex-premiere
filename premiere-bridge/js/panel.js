@@ -514,6 +514,9 @@
     if (command === "sequenceInventory") {
       return evalExtendScript("sequenceInventory", {});
     }
+    if (command === "getPlayheadPosition") {
+      return evalExtendScript("getPlayheadPosition", {});
+    }
     if (command === "debugTimecode") {
       return evalExtendScript("debugTimecode", cleanPayload);
     }

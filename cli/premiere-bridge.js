@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const http = require("http");
+const { spawnSync } = require("child_process");
 
 const DEFAULT_PORT = 17321;
 const TICKS_PER_SECOND = 254016000000;
@@ -22,6 +23,7 @@ Usage:
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
   premiere-bridge sequence-inventory [--port N] [--token TOKEN]
+  premiere-bridge get-playhead [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
   premiere-bridge set-in-out --in 00;00;10;00 --out 00;00;20;00 [--port N] [--token TOKEN]
@@ -42,6 +44,9 @@ Global:
   --dry-run  Validate and compute without writing changes to Premiere.
   --transport cep|uxp|auto  Choose transport (default: config or auto).
   --timeout-seconds N  Timeout for UXP IPC transport (default: 60).
+
+Notes:
+  get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -136,6 +141,275 @@ function attachDryRun(payload, dryRun) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runCommandSync(command, args, options) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    ...options
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr ? String(result.stderr).trim() : "";
+    const stdout = result.stdout ? String(result.stdout).trim() : "";
+    const details = stderr || stdout || `${command} exited with status ${result.status}`;
+    throw new Error(details);
+  }
+  return String(result.stdout || "");
+}
+
+function swiftHelperEnv() {
+  const env = { ...process.env };
+  const moduleCache =
+    env.SWIFT_MODULECACHE_PATH || path.join(env.TMPDIR || os.tmpdir(), "codex-swift-module-cache");
+  try {
+    fs.mkdirSync(moduleCache, { recursive: true });
+  } catch (err) {
+  }
+  env.SWIFT_MODULECACHE_PATH = moduleCache;
+  return env;
+}
+
+function runPremiereUiHelper(args) {
+  const helperPath = path.join(__dirname, "premiere-ui-timecode.swift");
+  const stdout = runCommandSync("swift", [helperPath, ...args], {
+    env: swiftHelperEnv()
+  });
+  const parsed = JSON.parse(stdout);
+  if (!parsed || parsed.ok !== true || !parsed.data) {
+    throw new Error((parsed && parsed.error) || "Premiere UI helper returned no data");
+  }
+  return parsed.data;
+}
+
+function capturePremiereWindow(windowId) {
+  const captureDir = fs.mkdtempSync(path.join(os.tmpdir(), "premiere-playhead-"));
+  const capturePath = path.join(captureDir, "window.png");
+  try {
+    runCommandSync("screencapture", ["-x", `-l${windowId}`, capturePath]);
+    return {
+      path: capturePath,
+      cleanup() {
+        fs.rmSync(captureDir, { recursive: true, force: true });
+      }
+    };
+  } catch (err) {
+    try {
+      fs.rmSync(captureDir, { recursive: true, force: true });
+    } catch (cleanupErr) {
+    }
+    throw err;
+  }
+}
+
+function clonePlayheadBridgeData(data) {
+  if (!data || typeof data !== "object") {
+    return data;
+  }
+  const clone = { ...data };
+  delete clone.verification;
+  return clone;
+}
+
+function numericDeltaOrNull(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return null;
+  }
+  return left - right;
+}
+
+function normalizeDebugTimecodeData(data) {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  if (data.timecode !== undefined && data.ticks !== undefined) {
+    return {
+      timecode: String(data.timecode),
+      ticks: String(data.ticks),
+      seconds: data.seconds !== undefined ? Number(data.seconds) : ticksToSeconds(data.ticks),
+      frames: data.frames !== undefined ? Number(data.frames) : null,
+      timebase: data.timebase !== undefined ? String(data.timebase) : null,
+      nominalFps: data.nominalFps !== undefined ? Number(data.nominalFps) : null,
+      dropFrame: data.dropFrame === true
+    };
+  }
+
+  const computedTicks = numericOrNull(data.computedTicks);
+  const timebase = numericOrNull(data.sequence && data.sequence.timebase);
+  if (computedTicks === null || timebase === null || timebase <= 0) {
+    return null;
+  }
+
+  const nominalFps = deriveNominalFps({ sequence: { timebase } }, timebase);
+  return {
+    timecode: data.input !== undefined ? String(data.input) : null,
+    ticks: String(Math.round(computedTicks)),
+    seconds: ticksToSeconds(computedTicks),
+    frames: Math.round(computedTicks / timebase),
+    timebase: String(Math.round(timebase)),
+    nominalFps,
+    dropFrame: data.input ? String(data.input).includes(";") : false
+  };
+}
+
+async function readPlayheadFromPremiereUi() {
+  if (process.platform !== "darwin") {
+    return {
+      ok: false,
+      error: "UI verification is only available on macOS"
+    };
+  }
+
+  try {
+    const window = runPremiereUiHelper(["window-info"]);
+    const capture = capturePremiereWindow(window.id);
+    try {
+      const ocr = runPremiereUiHelper(["ocr", capture.path]);
+      if (!ocr.selected || !ocr.selected.timecode) {
+        return {
+          ok: false,
+          error: "OCR did not find a playhead timecode candidate",
+          window,
+          ocr
+        };
+      }
+      return {
+        ok: true,
+        window,
+        selected: ocr.selected,
+        candidates: Array.isArray(ocr.candidates) ? ocr.candidates : [],
+        image: ocr.image || null
+      };
+    } finally {
+      capture.cleanup();
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err && err.message ? err.message : String(err)
+    };
+  }
+}
+
+async function maybeVerifyPlayheadWithUi(config, bridgeResult) {
+  if (!bridgeResult || !bridgeResult.body || bridgeResult.body.ok !== true || !bridgeResult.body.data) {
+    return bridgeResult;
+  }
+
+  const bridgeData = clonePlayheadBridgeData(bridgeResult.body.data);
+  const uiSnapshot = await readPlayheadFromPremiereUi();
+  const verification = {
+    selectedSource: "bridge",
+    matched: null,
+    bridge: bridgeData,
+    ui: uiSnapshot.ok
+      ? {
+          timecode: uiSnapshot.selected.timecode,
+          confidence: uiSnapshot.selected.confidence,
+          occurrences: uiSnapshot.selected.occurrences,
+          maxHeight: uiSnapshot.selected.maxHeight,
+          anchorDistance: uiSnapshot.selected.anchorDistance,
+          window: uiSnapshot.window,
+          image: uiSnapshot.image,
+          candidates: uiSnapshot.candidates
+        }
+      : {
+          error: uiSnapshot.error
+        }
+  };
+
+  if (!uiSnapshot.ok || !uiSnapshot.selected || !uiSnapshot.selected.timecode) {
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+
+  const bridgeTimecode = bridgeData.timecode ? String(bridgeData.timecode) : null;
+  const uiTimecode = String(uiSnapshot.selected.timecode);
+
+  if (Number(uiSnapshot.selected.confidence) < 0.7) {
+    verification.ui.untrusted = true;
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+
+  let debugResult;
+  try {
+    debugResult = await sendCommand(config, "debugTimecode", { timecode: uiTimecode });
+  } catch (err) {
+    verification.ui.conversionError = err && err.message ? err.message : String(err);
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+
+  if (!debugResult || !debugResult.body || debugResult.body.ok !== true || !debugResult.body.data) {
+    verification.ui.conversionError =
+      (debugResult && debugResult.body && debugResult.body.error) || "debugTimecode conversion failed";
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+
+  const converted = normalizeDebugTimecodeData(debugResult.body.data);
+  if (!converted) {
+    verification.ui.conversionError = "Unable to normalize debugTimecode response";
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+  const uiTicks = Number(converted.ticks);
+  const bridgeTicks = Number(bridgeData.ticks);
+  const secondsDelta = numericDeltaOrNull(converted.seconds, bridgeData.seconds);
+  const tickDelta = Number.isFinite(uiTicks) && Number.isFinite(bridgeTicks) ? uiTicks - bridgeTicks : null;
+  const timebase = Number(converted.timebase);
+  const frameDelta =
+    Number.isFinite(tickDelta) && Number.isFinite(timebase) && timebase > 0 ? Math.round(tickDelta / timebase) : null;
+
+  verification.matched = Number.isFinite(tickDelta) ? tickDelta === 0 : bridgeTimecode === uiTimecode;
+  verification.tickDelta = Number.isFinite(tickDelta) ? String(Math.round(tickDelta)) : null;
+  verification.secondsDelta = Number.isFinite(secondsDelta) ? secondsDelta : null;
+  verification.frameDelta = Number.isFinite(frameDelta) ? frameDelta : null;
+  verification.ui.converted = converted;
+
+  if (verification.matched) {
+    verification.selectedSource = "bridge";
+    bridgeResult.body.data = {
+      ...bridgeData,
+      verification
+    };
+    return bridgeResult;
+  }
+
+  verification.selectedSource = "ui";
+
+  bridgeResult.body.data = {
+    ...bridgeData,
+    ticks: String(converted.ticks),
+    seconds: converted.seconds,
+    timecode: String(converted.timecode),
+    method: "macosVisionOcr",
+    source: "ui",
+    verification
+  };
+  return bridgeResult;
 }
 
 function normalizeMarkers(input) {
@@ -795,6 +1069,13 @@ async function main() {
 
   if (command === "sequence-inventory") {
     const result = await sendCommand(config, "sequenceInventory", {});
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "get-playhead") {
+    const result = await sendCommand(config, "getPlayheadPosition", {});
+    await maybeVerifyPlayheadWithUi(config, result);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
