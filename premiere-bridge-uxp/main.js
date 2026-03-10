@@ -611,13 +611,52 @@ function tickTimeFromTicks(ticks) {
 }
 
 function createSequenceEditor(sequence) {
+  if (premiere.SequenceEditor && typeof premiere.SequenceEditor.getEditor === "function") {
+    return premiere.SequenceEditor.getEditor(sequence);
+  }
   if (premiere.SequenceEditor && typeof premiere.SequenceEditor.createSequenceEditor === "function") {
     return premiere.SequenceEditor.createSequenceEditor(sequence);
   }
   if (sequence && typeof sequence.createSequenceEditor === "function") {
     return sequence.createSequenceEditor();
   }
-  throw new Error("SequenceEditor.createSequenceEditor is unavailable");
+  throw new Error(
+    "SequenceEditor.getEditor is unavailable (checked premiere.SequenceEditor.getEditor, premiere.SequenceEditor.createSequenceEditor, and sequence.createSequenceEditor)"
+  );
+}
+
+function selectionAddItem(selection, trackItem) {
+  if (!selection) {
+    throw new Error("Track item selection is unavailable");
+  }
+  if (typeof selection.addItem === "function") {
+    return selection.addItem(trackItem, false);
+  }
+  if (typeof selection.addTrackItem === "function") {
+    return selection.addTrackItem(trackItem);
+  }
+  throw new Error("TrackItemSelection.addItem is unavailable");
+}
+
+function selectionItems(selection) {
+  if (!selection) {
+    return [];
+  }
+  if (typeof selection.getTrackItems === "function") {
+    return normalizeTrackItems(selection.getTrackItems());
+  }
+  if (
+    typeof selection.getTrackItemCount === "function" &&
+    typeof selection.getTrackItemAt === "function"
+  ) {
+    const out = [];
+    const count = Number(selection.getTrackItemCount()) || 0;
+    for (let i = 0; i < count; i += 1) {
+      out.push(selection.getTrackItemAt(i));
+    }
+    return out;
+  }
+  return [];
 }
 
 function relToAbsTicks(ticksValue, context) {
@@ -1937,9 +1976,13 @@ async function splitTrackItemAtTicks(context, editor, track, trackItem, splitTic
     true,
     false
   );
-  await project.executeTransaction(async (compound) => {
-    compound.addAction(cloneAction);
-  }, "Clone track item for split");
+  try {
+    await project.executeTransaction(async (compound) => {
+      compound.addAction(cloneAction);
+    }, "Clone track item for split");
+  } catch (errClone) {
+    throw new Error(`SequenceEditor.createCloneTrackItemAction failed: ${String(errClone)}`);
+  }
 
   const afterItems = await getTrackClipItems(track);
   const newItems = afterItems.filter((item) => !beforeSet.has(item));
@@ -1960,11 +2003,15 @@ async function splitTrackItemAtTicks(context, editor, track, trackItem, splitTic
     clone.createSetInPointAction(rightIn)
   ];
 
-  await project.executeTransaction(async (compound) => {
-    for (const action of actions) {
-      compound.addAction(action);
-    }
-  }, "Split track item");
+  try {
+    await project.executeTransaction(async (compound) => {
+      for (const action of actions) {
+        compound.addAction(action);
+      }
+    }, "Split track item");
+  } catch (errSplit) {
+    throw new Error(`Track item split actions failed: ${String(errSplit)}`);
+  }
 
   return { split: true };
 }
@@ -1973,9 +2020,9 @@ async function splitAllTracksAtTicks(context, splitTicks) {
   const { project, sequence } = context;
   const editor = createSequenceEditor(sequence);
   const tracks = await getAllTrackItems(sequence);
-  const summary = { splitTicks, splits: 0, errors: [] };
+  const summary = { splitTicks, candidateCount: 0, splits: 0, errors: [] };
 
-  async function processTrack(trackInfo) {
+  async function processTrack(kind, trackInfo) {
     const candidates = [];
     for (const item of trackInfo.items) {
       const startRelTicks = tickTimeToTicks(await item.getStartTime());
@@ -1989,6 +2036,7 @@ async function splitAllTracksAtTicks(context, splitTicks) {
         candidates.push(item);
       }
     }
+    summary.candidateCount += candidates.length;
     for (const item of candidates) {
       try {
         const result = await splitTrackItemAtTicks(context, editor, trackInfo.track, item, splitTicks);
@@ -1996,16 +2044,16 @@ async function splitAllTracksAtTicks(context, splitTicks) {
           summary.splits += 1;
         }
       } catch (errSplit) {
-        summary.errors.push(String(errSplit));
+        summary.errors.push(`${kind}[${trackInfo.index}]: ${String(errSplit)}`);
       }
     }
   }
 
   for (const trackInfo of tracks.video) {
-    await processTrack(trackInfo);
+    await processTrack("video", trackInfo);
   }
   for (const trackInfo of tracks.audio) {
-    await processTrack(trackInfo);
+    await processTrack("audio", trackInfo);
   }
 
   return summary;
@@ -2029,7 +2077,7 @@ async function removeRangeWithRipple(context, inTicks, outTicks) {
           continue;
         }
         if (startTicks >= inTicks && endTicks <= outTicks) {
-          selection.addTrackItem(item);
+          selectionAddItem(selection, item);
         }
       }
     }
@@ -2038,7 +2086,8 @@ async function removeRangeWithRipple(context, inTicks, outTicks) {
   await addRangeItems(tracks.video);
   await addRangeItems(tracks.audio);
 
-  const count = selection.getTrackItemCount();
+  const selectedItems = selectionItems(selection);
+  const count = selectedItems.length;
   if (!count) {
     throw new Error("No track items found within the range to remove");
   }
@@ -2064,6 +2113,12 @@ async function razorAtTimecode(payload) {
     throw new Error("Provide ticks, seconds, or timecode");
   }
   const splitSummary = await splitAllTracksAtTicks(context, ticks);
+  if (splitSummary.candidateCount > 0 && splitSummary.splits === 0) {
+    const uniqueErrors = Array.from(new Set(splitSummary.errors));
+    throw new Error(
+      `UXP razor-cut is currently blocked by Premiere Pro: SequenceEditor.createCloneTrackItemAction failed on all ${splitSummary.candidateCount} eligible track items. ${uniqueErrors.join(" | ")}`
+    );
+  }
   return {
     ticks: String(ticks),
     timecode: ticksToTimecode(ticks, context),
@@ -2099,7 +2154,8 @@ async function rippleDeleteSelection() {
   const context = await buildSequenceContext();
   const { sequence } = context;
   const selection = sequence.getSelection();
-  const count = selection.getTrackItemCount();
+  const selectedItems = selectionItems(selection);
+  const count = selectedItems.length;
   if (!count) {
     throw new Error("No selected track items found");
   }
@@ -2107,7 +2163,7 @@ async function rippleDeleteSelection() {
   let minStart = null;
   let maxEnd = null;
   for (let i = 0; i < count; i += 1) {
-    const item = selection.getTrackItemAt(i);
+    const item = selectedItems[i];
     const startRelTicks = tickTimeToTicks(await item.getStartTime());
     const endRelTicks = tickTimeToTicks(await item.getEndTime());
     const startTicks = relToAbsTicks(startRelTicks, context);

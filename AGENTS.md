@@ -5,7 +5,7 @@
 
 ## Project Map
 - `cli/premiere-bridge.js`: Node CLI, transport selection, rough-cut orchestration, JSON file parsing, and the user-facing command surface.
-- `premiere-bridge-uxp/main.js`: preferred UXP panel and file-IPC command bridge.
+- `premiere-bridge-uxp/main.js`: experimental/deferred UXP panel and file-IPC command bridge. Use for UXP-only features and host validation, not as the default edit path.
 - `premiere-bridge-uxp/manifest.json`: UXP plugin identity, host version, and permissions.
 - `premiere-bridge/js/panel.js`: legacy CEP panel wrapper, localhost HTTP bridge, and CEP-to-ExtendScript dispatch.
 - `premiere-bridge/jsx/premiere-bridge.jsx`: actual ExtendScript/QE implementation for the CEP path.
@@ -17,15 +17,16 @@
 - Run repo commands from `/Users/brents/code/codex-premiere`. The CLI reads the shared config plus an optional cwd-local `.premiere-bridge.json`.
 - Search by command name before reading whole files. `premiere-bridge-uxp/main.js` and especially `premiere-bridge/jsx/premiere-bridge.jsx` are large and multi-purpose.
 - If the task is live Premiere control rather than code changes, use the bridge CLI from this repo root.
+- Default to CEP for mutating timeline and project-item operations. Reach for UXP only when the command is explicitly UXP-only, when the user asks for UXP validation, or when you are re-checking a known host limitation.
 - For UXP panel reloads, prefer `./cli/uxp-devtools.sh` from the repo root instead of manual UI interaction in Adobe UXP Developer Tools. The helper bootstraps an ignored Rosetta/x64 Node + Adobe CLI toolchain under `.codex-local/`.
 
 ## Command Surface Rules
 - CLI commands are kebab-case. Internal bridge commands are camelCase.
-- Aim for both CEP and UXP support when practical, but keep CEP as the priority path.
-- UXP is more restrictive than CEP. If parity is not realistically possible in UXP, document the limitation and keep the CEP path correct rather than forcing a weak UXP approximation.
+- Default to CEP-first delivery. Only add or maintain UXP parity when it is low-risk, already proven in-host, or uniquely required by a UXP-only feature.
+- UXP is more restrictive than CEP and is currently not a viable target for destructive timeline edits on this host. If parity is not realistically possible in UXP, document the limitation and keep the CEP path correct rather than forcing a weak UXP approximation.
 - When you add or change a command, assume all affected layers may need coordinated updates:
   1. `cli/premiere-bridge.js` usage text, arg parsing, transport call, and printed output.
-  2. `premiere-bridge-uxp/main.js` `handleCommand()` plus any helper implementation.
+  2. `premiere-bridge-uxp/main.js` `handleCommand()` plus any helper implementation, but only when the command is already supported in UXP, is UXP-only, or the task is explicitly about UXP validation.
   3. `premiere-bridge/js/panel.js` `handleCommand()` plus any CEP-side prep/verification.
   4. `premiere-bridge/jsx/premiere-bridge.jsx` implementation for the actual Premiere API/QE work.
   5. `README.md` when the user-facing command set or workflow changes.
@@ -35,6 +36,7 @@
   - `menu-command-id` is meaningful only on the CEP/ExtendScript path and returns unsupported in UXP.
 - `--transport auto` is not a full capability fallback. It falls back from CEP to UXP only on retryable socket failures such as `ECONNREFUSED`. A CEP `ok:false`, `401`, or other logical response does not retry in UXP.
 - If a command cannot reach parity in UXP, preserve the CEP implementation as the source of truth and document the UXP limitation clearly.
+- Do not let blocked UXP parity hold up CEP delivery. Ship the CEP path, leave an explicit UXP capability error when needed, and track the host limitation in a separate issue.
 - If a command is temporarily UXP-only, make the CLI call `sendCommandUxp()` directly instead of generic `sendCommand()`, and document the limitation in `README.md`.
 - UXP IPC is single-slot: one shared `command.json` and one shared `result.json`. Do not run multiple live UXP-backed commands in parallel.
 
@@ -67,11 +69,11 @@
   - `git diff --check`
 - Live validation loop when Premiere is available:
   - CEP health: `./cli/premiere-bridge.js ping --transport cep`
-  - UXP health: `./cli/premiere-bridge.js ping --transport uxp --timeout-seconds 2`
-  - UXP DevTools app connectivity: `./cli/uxp-devtools.sh apps`
+  - run the specific CEP command you changed with a realistic payload
+  - UXP health: `./cli/premiere-bridge.js ping --transport uxp --timeout-seconds 2` only when touching UXP code, validating a UXP-only command, or re-checking a known UXP host limitation
+  - UXP DevTools app connectivity: `./cli/uxp-devtools.sh apps` only when touching UXP code or validating UXP behavior
   - UXP panel reload after JS/HTML/CSS changes: `./cli/uxp-devtools.sh reload`
   - UXP panel load after manifest changes or first-time setup: `./cli/uxp-devtools.sh load`
-  - run the specific command you changed with a realistic payload
 - Static checks are not enough for bridge work. A repo edit is incomplete until the installed panel/plugin has been reloaded and the behavior has been confirmed inside Premiere.
 - If live validation is blocked, say so explicitly and include the exact failure string. Common examples in this repo are:
   - `connect ECONNREFUSED 127.0.0.1:17321`

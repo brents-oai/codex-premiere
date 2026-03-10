@@ -122,6 +122,12 @@ Color indices:
 The UXP panel at `premiere-bridge-uxp/` now acts as a command bridge (not just
 transcript export). The CLI can talk to it via file-based IPC.
 
+Destructive edit note:
+- CEP remains the source of truth for edit mutations.
+- On hosts where Premiere Pro rejects `SequenceEditor.createCloneTrackItemAction`,
+  UXP `razor-cut` and `extract-range` now return an explicit capability error
+  instead of a false success. Use `--transport cep` for those edits on affected hosts.
+
 High-level flow:
 - The UXP panel polls a file-based IPC directory.
 - The CLI writes a command to that directory.
