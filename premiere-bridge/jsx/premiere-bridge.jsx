@@ -266,12 +266,44 @@ PremiereBridge._ticksToTimecode = function (ticks) {
     var seq = app.project.activeSequence;
     var timebase = PremiereBridge._getSequenceTimebase(seq);
     var nominalFps = PremiereBridge._getNominalFps(seq, timebase);
+    var settings = null;
+    try {
+      if (seq && seq.getSettings) {
+        settings = seq.getSettings();
+      }
+    } catch (errSettings) {
+    }
     var tb = Number(timebase);
     var fps = Math.max(1, Math.round(Number(nominalFps)));
     if (!tb || !fps || isNaN(tb) || isNaN(fps) || tb <= 0 || fps <= 0) {
       return null;
     }
     var totalFrames = Math.max(0, Math.round(Number(ticks) / tb));
+    var dropFrame = false;
+    try {
+      if (settings && settings.videoDisplayFormat !== undefined && settings.videoDisplayFormat !== null) {
+        var format = Number(settings.videoDisplayFormat);
+        dropFrame = format === 102 || format === 106 || format === 110;
+      }
+    } catch (errDropFrame) {
+    }
+    if (dropFrame) {
+      var dropFrames = Math.round(fps * 0.066666);
+      var framesPerHourDf = fps * 3600;
+      var framesPer24Hours = framesPerHourDf * 24;
+      var framesPer10Minutes = (fps * 600) - (dropFrames * 9);
+      var framesPerMinute = (fps * 60) - dropFrames;
+      totalFrames = totalFrames % framesPer24Hours;
+      var d = Math.floor(totalFrames / framesPer10Minutes);
+      var m = totalFrames % framesPer10Minutes;
+      var extraMinutes = Math.floor(Math.max(0, m - dropFrames) / framesPerMinute);
+      if (extraMinutes > 9) {
+        extraMinutes = 9;
+      }
+      var totalMinutesDf = (d * 10) + extraMinutes;
+      var droppedFrames = dropFrames * (totalMinutesDf - Math.floor(totalMinutesDf / 10));
+      totalFrames += droppedFrames;
+    }
     var framesPerHour = fps * 3600;
     var framesPerMinute = fps * 60;
     var hours = Math.floor(totalFrames / framesPerHour);
@@ -284,7 +316,8 @@ PremiereBridge._ticksToTimecode = function (ticks) {
       var v = Math.max(0, Math.floor(Number(n)));
       return (v < 10 ? "0" : "") + String(v);
     }
-    return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds) + ":" + pad2(frames);
+    var separator = dropFrame ? ";" : ":";
+    return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds) + separator + pad2(frames);
   } catch (errFallback) {
   }
   return null;
@@ -1064,6 +1097,159 @@ PremiereBridge.getSequenceInfo = function () {
     }
 
     return PremiereBridge._ok(info);
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.getPlayheadPosition = function () {
+  try {
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var startTicks = PremiereBridge._sequenceStartTicks(sequence, qeSeq);
+    var inPointTicks = null;
+    var qeCtiTimecode = null;
+    var errors = [];
+
+    try {
+      if (sequence.getInPointAsTime) {
+        inPointTicks = PremiereBridge._timeToTicks(sequence.getInPointAsTime());
+      } else if (sequence.getInPoint) {
+        var inPointSeconds = Number(sequence.getInPoint());
+        if (!isNaN(inPointSeconds)) {
+          inPointTicks = Number(PremiereBridge._secondsToTicks(inPointSeconds));
+        }
+      }
+    } catch (errInPoint) {
+      errors.push("sequence.getInPoint: " + String(errInPoint));
+    }
+
+    try {
+      if (qeSeq && qeSeq.CTI && qeSeq.CTI.timecode) {
+        qeCtiTimecode = String(qeSeq.CTI.timecode);
+      }
+    } catch (errQeCtiTimecode) {
+      errors.push("qe.CTI.timecode: " + String(errQeCtiTimecode));
+    }
+
+    function finalize(method, rawValue) {
+      var rawTicksFromTicks = null;
+      var rawTicksFromSeconds = null;
+      var rawTicks = PremiereBridge._timeToTicks(rawValue);
+      if (rawTicks === null || rawTicks === undefined || isNaN(Number(rawTicks))) {
+        errors.push(method + " returned an unreadable position");
+        return null;
+      }
+      try {
+        if (rawValue && rawValue.ticks !== undefined && rawValue.ticks !== null) {
+          rawTicksFromTicks = Number(rawValue.ticks);
+        }
+      } catch (errTicksField) {
+      }
+      try {
+        if (rawValue && rawValue.seconds !== undefined && rawValue.seconds !== null) {
+          var rawSeconds = Number(rawValue.seconds);
+          if (!isNaN(rawSeconds)) {
+            rawTicksFromSeconds = Number(PremiereBridge._secondsToTicks(rawSeconds));
+          }
+        }
+      } catch (errSecondsField) {
+      }
+      var roundedTicks = Math.round(Number(rawTicks));
+      var normalizedTicks = roundedTicks;
+      var normalizedWithZeroPoint = false;
+      var rawTimecode = null;
+      var rawTimecodeTicks = null;
+      try {
+        if (rawValue && rawValue.timecode) {
+          rawTimecode = String(rawValue.timecode);
+          rawTimecodeTicks = PremiereBridge._timecodeToTicks(rawTimecode);
+        }
+      } catch (errRawTimecode) {
+      }
+      if (startTicks > 0 && roundedTicks >= 0 && roundedTicks < startTicks) {
+        normalizedTicks = startTicks + roundedTicks;
+        normalizedWithZeroPoint = true;
+      }
+      return {
+        ticks: String(normalizedTicks),
+        seconds: normalizedTicks / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(normalizedTicks),
+        method: method,
+        source: "cep",
+        rawPlayerPositionTicks: String(roundedTicks),
+        rawPlayerPositionTicksField:
+          rawTicksFromTicks !== null && rawTicksFromTicks !== undefined && !isNaN(Number(rawTicksFromTicks))
+            ? String(Math.round(Number(rawTicksFromTicks)))
+            : null,
+        rawPlayerPositionSecondsTicks:
+          rawTicksFromSeconds !== null && rawTicksFromSeconds !== undefined && !isNaN(Number(rawTicksFromSeconds))
+            ? String(Math.round(Number(rawTicksFromSeconds)))
+            : null,
+        rawPlayerPositionTimecode: rawTimecode,
+        rawPlayerPositionTimecodeTicks:
+          rawTimecodeTicks !== null && rawTimecodeTicks !== undefined && !isNaN(Number(rawTimecodeTicks))
+            ? String(Math.round(Number(rawTimecodeTicks)))
+            : null,
+        sequenceInPointTicks:
+          inPointTicks !== null && inPointTicks !== undefined && !isNaN(Number(inPointTicks))
+            ? String(Math.round(Number(inPointTicks)))
+            : null,
+        sequenceStartTicks: String(startTicks),
+        qeCtiTimecode: qeCtiTimecode,
+        qeCtiTimecodeTicks:
+          qeCtiTimecode !== null && qeCtiTimecode !== undefined
+            ? String(Math.round(Number(PremiereBridge._timecodeToTicks(qeCtiTimecode))))
+            : null,
+        normalizedWithZeroPoint: normalizedWithZeroPoint
+      };
+    }
+
+    if (sequence.getPlayerPosition) {
+      try {
+        var domResult = finalize("sequence.getPlayerPosition", sequence.getPlayerPosition());
+        if (domResult) {
+          return PremiereBridge._ok(domResult);
+        }
+      } catch (errDom) {
+        errors.push("sequence.getPlayerPosition: " + String(errDom));
+      }
+    }
+
+    if (qeSeq && qeSeq.getPlayerPosition) {
+      try {
+        var qeMethodResult = finalize("qe.getPlayerPosition", qeSeq.getPlayerPosition());
+        if (qeMethodResult) {
+          return PremiereBridge._ok(qeMethodResult);
+        }
+      } catch (errQeMethod) {
+        errors.push("qe.getPlayerPosition: " + String(errQeMethod));
+      }
+    }
+
+    if (qeSeq && qeSeq.CTI !== undefined && qeSeq.CTI !== null) {
+      try {
+        var qeCtiResult = finalize("qe.CTI", qeSeq.CTI);
+        if (qeCtiResult) {
+          return PremiereBridge._ok(qeCtiResult);
+        }
+      } catch (errQeCti) {
+        errors.push("qe.CTI: " + String(errQeCti));
+      }
+    }
+
+    return PremiereBridge._err("Unable to read playhead position", {
+      errors: errors,
+      available: {
+        sequenceGetPlayerPosition: !!(sequence && sequence.getPlayerPosition),
+        qeGetPlayerPosition: !!(qeSeq && qeSeq.getPlayerPosition),
+        qeCti: !!(qeSeq && qeSeq.CTI !== undefined && qeSeq.CTI !== null)
+      }
+    });
   } catch (err) {
     return PremiereBridge._err(String(err));
   }

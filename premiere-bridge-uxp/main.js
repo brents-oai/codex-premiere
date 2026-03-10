@@ -579,6 +579,32 @@ function tickTimeToTicks(tickTime) {
   return null;
 }
 
+function tickTimeToSeconds(tickTime) {
+  if (!tickTime) {
+    return null;
+  }
+  try {
+    if (tickTime.seconds !== undefined && tickTime.seconds !== null) {
+      const n = Number(tickTime.seconds);
+      if (!Number.isNaN(n)) {
+        return n;
+      }
+    }
+  } catch (errSeconds) {
+  }
+  try {
+    if (typeof tickTime.getSeconds === "function") {
+      const v = tickTime.getSeconds();
+      const n = Number(v);
+      if (!Number.isNaN(n)) {
+        return n;
+      }
+    }
+  } catch (errGetSeconds) {
+  }
+  return null;
+}
+
 function tickTimeFromTicks(ticks) {
   const rounded = Math.max(0, Math.round(Number(ticks) || 0));
   return premiere.TickTime.createWithTicks(String(rounded));
@@ -798,6 +824,23 @@ function ticksToTimecode(ticks, context) {
   if (frames < 0) {
     frames = 0;
   }
+  const dropFrame = context && context.dropFrame === true;
+  if (dropFrame) {
+    const dropFrames = Math.round(fps * 0.066666);
+    const framesPerHour = fps * 3600;
+    const framesPer24Hours = framesPerHour * 24;
+    const framesPer10Minutes = (fps * 600) - (dropFrames * 9);
+    const framesPerMinute = (fps * 60) - dropFrames;
+    frames = frames % framesPer24Hours;
+    const d = Math.floor(frames / framesPer10Minutes);
+    const m = frames % framesPer10Minutes;
+    let extraMinutes = Math.floor(Math.max(0, m - dropFrames) / framesPerMinute);
+    if (extraMinutes > 9) {
+      extraMinutes = 9;
+    }
+    const totalMinutes = (d * 10) + extraMinutes;
+    frames += dropFrames * (totalMinutes - Math.floor(totalMinutes / 10));
+  }
   const framesPerHour = fps * 3600;
   const framesPerMinute = fps * 60;
   const hours = Math.floor(frames / framesPerHour);
@@ -806,7 +849,8 @@ function ticksToTimecode(ticks, context) {
   frames = frames % framesPerMinute;
   const seconds = Math.floor(frames / fps);
   const framePart = frames % fps;
-  return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}:${pad2(framePart)}`;
+  const separator = dropFrame ? ";" : ":";
+  return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}${separator}${pad2(framePart)}`;
 }
 
 function ticksFromPayload(payload, prefix, context) {
@@ -1294,6 +1338,49 @@ async function getSequenceInfo() {
     timebase: String(context.timebase),
     settings: context.settings,
     settingsError: context.settingsError
+  };
+}
+
+async function getPlayheadPosition() {
+  const context = await buildSequenceContext();
+  const { sequence } = context;
+  if (typeof sequence.getPlayerPosition !== "function") {
+    throw new Error("Sequence.getPlayerPosition is unavailable");
+  }
+  const rawPosition = await sequence.getPlayerPosition();
+  const relTicks = tickTimeToTicks(rawPosition);
+  const relSeconds = tickTimeToSeconds(rawPosition);
+  if (relTicks === null || Number.isNaN(relTicks)) {
+    throw new Error("Unable to read current playhead position");
+  }
+  let inPointTicks = null;
+  try {
+    if (typeof sequence.getInPoint === "function") {
+      inPointTicks = tickTimeToTicks(await sequence.getInPoint());
+    }
+  } catch (errInPoint) {
+  }
+  let videoDisplayFormat = null;
+  try {
+    if (typeof sequence.getSequenceVideoTimeDisplayFormat === "function") {
+      videoDisplayFormat = await sequence.getSequenceVideoTimeDisplayFormat();
+    }
+  } catch (errDisplayFormat) {
+  }
+  const summary = summarizeTicks(relTicks, context);
+  return {
+    ticks: summary.ticks,
+    seconds: summary.seconds,
+    timecode: summary.timecode,
+    method: "sequence.getPlayerPosition",
+    source: "uxp",
+    rawPlayerPositionTicks: String(relTicks),
+    rawPlayerPositionSecondsTicks:
+      relSeconds === null || Number.isNaN(relSeconds) ? null : String(Math.round(secondsToTicks(relSeconds))),
+    sequenceInPointTicks:
+      inPointTicks === null || Number.isNaN(inPointTicks) ? null : String(Math.round(inPointTicks)),
+    sequenceStartTicks: String(context.startTicks || 0),
+    videoDisplayFormat: videoDisplayFormat
   };
 }
 
@@ -2143,6 +2230,9 @@ async function handleCommand(command, payload) {
   }
   if (command === "sequenceInventory") {
     return { ok: true, data: await sequenceInventory() };
+  }
+  if (command === "getPlayheadPosition") {
+    return { ok: true, data: await getPlayheadPosition() };
   }
   if (command === "debugTimecode") {
     return { ok: true, data: await debugTimecode(cleanPayload) };

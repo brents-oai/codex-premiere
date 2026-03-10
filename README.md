@@ -40,6 +40,8 @@ The CEP panel writes the same config file used by the UXP panel and CLI.
 
 The CLI reads the shared config file above for the port, token, and preferred transport. Use `--transport uxp|cep|auto` to override.
 
+On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI and prefers it when `getPlayerPosition()` is stale.
+
 ```bash
 ./cli/premiere-bridge.js ping
 ./cli/premiere-bridge.js reload-project
@@ -54,6 +56,7 @@ The CLI reads the shared config file above for the port, token, and preferred tr
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
 ./cli/premiere-bridge.js sequence-inventory
+./cli/premiere-bridge.js get-playhead
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
 ./cli/premiere-bridge.js set-playhead --timecode 00;00;10;00
 ./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
@@ -101,6 +104,7 @@ Color indices:
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`
 - `sequence-inventory`
+- `get-playhead`
 - `debug-timecode`
 - `set-playhead`
 - `set-in-out`
@@ -145,6 +149,69 @@ The UXP panel and CLI communicate via:
 
 By default, the CLI uses the transport stored in the shared config file. When
 the UXP panel saves the config, it sets `transport: \"uxp\"`.
+
+## Get Playhead Position
+
+Read the current CTI/playhead position as ticks, seconds, and timecode:
+
+```bash
+./cli/premiere-bridge.js get-playhead --transport cep
+```
+
+Expected response fields include:
+- `ticks`
+- `seconds`
+- `timecode`
+- `method`
+- `source`
+- `verification`
+
+Example response when the bridge and UI agree:
+
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "ok": true,
+    "data": {
+      "ticks": "78433824268800",
+      "seconds": 308.775133333333,
+      "timecode": "00:05:08;24",
+      "method": "sequence.getPlayerPosition",
+      "source": "cep",
+      "verification": {
+        "selectedSource": "bridge",
+        "matched": true
+      }
+    }
+  }
+}
+```
+
+When Premiere's playhead API is stale on macOS, the CLI returns the UI-verified timecode instead and includes both sources under `verification`.
+
+Example response when the bridge is stale and the CLI promotes the UI value:
+
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "ok": true,
+    "data": {
+      "ticks": "17722620115200",
+      "seconds": 69.7697,
+      "timecode": "00;01;09;23",
+      "method": "macosVisionOcr",
+      "source": "ui",
+      "verification": {
+        "selectedSource": "ui",
+        "matched": false,
+        "frameDelta": 52
+      }
+    }
+  }
+}
+```
 
 ## Sequence Audio Export (CEP + UXP)
 
