@@ -47,6 +47,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
 ./cli/premiere-bridge.js export-sequence-direct --transport cep --output-dir /ABS/PATH --filename active-sequence.wav --preset /ABS/PATH/audio-48k.epr
+./cli/premiere-bridge.js export-sequences-direct --transport cep --sequences-file /ABS/PATH/sequences.json --output-dir /ABS/PATH --filename-extension .wav --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport cep --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport uxp --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js duplicate-sequence --name "Rough Cut"
@@ -97,6 +98,7 @@ Color indices:
 - `reload-project`
 - `save-project`
 - `export-sequence-direct` (CEP only; requires `--preset` plus either `--output` or `--output-dir` + `--filename`)
+- `export-sequences-direct` (CEP only; requires `--preset` plus `--sequences`/`--sequences-file`, and either per-item `outputPath` values or `--output-dir` with per-item `filename` / `--filename-extension`)
 - `export-sequence-audio` (requires `--transport cep|uxp`)
 - `duplicate-sequence`
 - `list-sequences`
@@ -267,6 +269,88 @@ Expected response fields include:
 - `file.exists`
 - `file.bytes`
 - `durationSeconds` (if available)
+
+## Batch Sequence Export (CEP)
+
+Export multiple explicitly selected sequences by reusing the CEP `openSequence` + `exportSequenceDirect` path for each item.
+
+Inline JSON example:
+
+```bash
+./cli/premiere-bridge.js export-sequences-direct \
+  --transport cep \
+  --sequences '[{"name":"Interview Selects","outputPath":"/ABS/PATH/exports/interview-selects.wav"},{"id":"0837d0ca-8d4c-4267-b8fb-dbe4e6fda717","filename":"rough-cut.wav"}]' \
+  --output-dir /ABS/PATH/exports \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+JSON file example with derived filenames:
+
+```bash
+./cli/premiere-bridge.js export-sequences-direct \
+  --transport cep \
+  --sequences-file /ABS/PATH/sequences.json \
+  --output-dir /ABS/PATH/exports \
+  --filename-extension .wav \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+`sequences.json` can be either an array or an object with a `sequences`/`items` array:
+
+```json
+{
+  "sequences": [
+    { "name": "Interview Selects", "outputPath": "/ABS/PATH/exports/interview-selects.wav" },
+    { "id": "0837d0ca-8d4c-4267-b8fb-dbe4e6fda717" },
+    { "name": "Rough Cut", "filename": "rough-cut.wav" }
+  ]
+}
+```
+
+Required args:
+- `--preset /ABS/PATH/export-preset.epr`
+- `--sequences '[...]'`, or
+- `--sequences-file /ABS/PATH/sequences.json`
+
+Output target rules:
+- Each item must select a sequence with `name`, `id`, or both.
+- Each item may provide `outputPath` for a fully explicit export target.
+- If using `--output-dir`, an item may provide `filename`, or the CLI can derive a deterministic filename when `--filename-extension` is also provided.
+- Derived filenames are based on the resolved sequence name, and the response reports the exact `outputFilename` that was applied.
+
+Optional args:
+- `--output-dir /ABS/PATH/output-dir`
+- `--filename-extension .ext`
+- `--dry-run`
+
+Current limitation:
+- `export-sequences-direct` is currently supported only on the CEP path. `--transport uxp` returns an explicit CLI error.
+- The command does not guess file extensions. When using `--output-dir` without per-item filenames, provide `--filename-extension`.
+- Sequence names must resolve uniquely. If a name matches multiple sequences, the result item reports the ambiguity and does not export that item.
+
+Expected top-level response fields include:
+- `transport`
+- `presetPath`
+- `outputDirectory`
+- `filenameExtension`
+- `requestedCount`
+- `exportedCount`
+- `failedCount`
+- `activeSequenceBefore`
+- `restore`
+- `results[]`
+
+Each `results[]` item includes:
+- `requested`
+- `sequence`
+- `outputPath`
+- `outputDirectory`
+- `outputFilename`
+- `outputPathSource` (`item-output-path`, `item-filename-and-output-dir`, or `output-dir-and-derived-filename`)
+- `file.exists`
+- `file.bytes`
+- `method` (when export succeeds)
+- `error` (when an item fails)
 
 ## Sequence Audio Export (CEP + UXP)
 
