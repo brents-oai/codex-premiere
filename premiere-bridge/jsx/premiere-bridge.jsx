@@ -2435,9 +2435,10 @@ PremiereBridge.saveProject = function (jsonStr) {
   }
 };
 
-PremiereBridge.exportSequenceAudio = function (jsonStr) {
+PremiereBridge._exportSequenceWithPreset = function (payload, options) {
   try {
-    var payload = PremiereBridge._parse(jsonStr) || {};
+    var cleanPayload = payload || {};
+    var cleanOptions = options || {};
     var project = app.project;
     if (!project) {
       return PremiereBridge._err("No project loaded");
@@ -2447,16 +2448,16 @@ PremiereBridge.exportSequenceAudio = function (jsonStr) {
       return PremiereBridge._err("No active sequence");
     }
 
-    var outputPath = payload.outputPath ? String(payload.outputPath) : null;
+    var outputPath = cleanPayload.outputPath ? String(cleanPayload.outputPath) : null;
     if (!outputPath) {
       return PremiereBridge._err("Missing outputPath");
     }
-    var presetPath = payload.presetPath ? String(payload.presetPath) : null;
+    var presetPath = cleanPayload.presetPath ? String(cleanPayload.presetPath) : null;
     if (!presetPath) {
       return PremiereBridge._err("Missing presetPath");
     }
 
-    var workAreaType = payload.workAreaType !== undefined ? Number(payload.workAreaType) : 0;
+    var workAreaType = cleanPayload.workAreaType !== undefined ? Number(cleanPayload.workAreaType) : 0;
     if (isNaN(workAreaType) || workAreaType < 0) {
       workAreaType = 0;
     }
@@ -2502,13 +2503,16 @@ PremiereBridge.exportSequenceAudio = function (jsonStr) {
     }
 
     if (!method) {
-      return PremiereBridge._err("Failed to export active sequence audio", {
+      return PremiereBridge._err(
+        cleanOptions.failureLabel ? String(cleanOptions.failureLabel) : "Failed to export active sequence",
+        {
         outputPath: outputFile.fsName,
         presetPath: presetFile.fsName,
         workAreaType: workAreaType,
         methodsTried: methodsTried,
         errors: errors
-      });
+        }
+      );
     }
 
     var exists = false;
@@ -2537,6 +2541,26 @@ PremiereBridge.exportSequenceAudio = function (jsonStr) {
         bytes: bytes
       },
       durationSeconds: null
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.exportSequenceDirect = function (jsonStr) {
+  try {
+    return PremiereBridge._exportSequenceWithPreset(PremiereBridge._parse(jsonStr) || {}, {
+      failureLabel: "Failed to export active sequence"
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.exportSequenceAudio = function (jsonStr) {
+  try {
+    return PremiereBridge._exportSequenceWithPreset(PremiereBridge._parse(jsonStr) || {}, {
+      failureLabel: "Failed to export active sequence audio"
     });
   } catch (err) {
     return PremiereBridge._err(String(err));

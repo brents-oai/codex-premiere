@@ -317,6 +317,81 @@
     };
   }
 
+  async function prepareDirectExportPayload(payload) {
+    const clean = payload && typeof payload === "object" ? payload : {};
+    let sequenceName = "active-sequence";
+    try {
+      const info = await evalExtendScript("getSequenceInfo", {});
+      if (info && info.ok && info.data && info.data.name) {
+        sequenceName = String(info.data.name);
+      }
+    } catch (errInfo) {
+    }
+
+    if (!clean.outputPath) {
+      return { ok: false, error: "Missing outputPath. Provide --output /abs/path.ext." };
+    }
+    if (!clean.presetPath) {
+      return { ok: false, error: "Missing presetPath. Provide --preset /abs/path.epr." };
+    }
+
+    const outputPath = path.resolve(String(clean.outputPath));
+    const presetPath = path.resolve(String(clean.presetPath));
+
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    } catch (errDir) {
+      return { ok: false, error: `Failed to create output directory: ${errDir.message}` };
+    }
+
+    if (!fs.existsSync(presetPath)) {
+      return {
+        ok: false,
+        error: "Preset file not found.",
+        data: { presetPath }
+      };
+    }
+
+    return {
+      ok: true,
+      payload: {
+        outputPath,
+        presetPath,
+        workAreaType: clean.workAreaType !== undefined ? Number(clean.workAreaType) : 0
+      },
+      sequenceName
+    };
+  }
+
+  function verifyExportedFile(resultData, fallback) {
+    const fallbackData = fallback && typeof fallback === "object" ? fallback : {};
+    const outputPath = resultData && resultData.outputPath
+      ? String(resultData.outputPath)
+      : fallbackData.outputPath;
+    const presetPath = resultData && resultData.presetPath
+      ? String(resultData.presetPath)
+      : fallbackData.presetPath;
+    const sequenceName = resultData && resultData.sequence && resultData.sequence.name
+      ? String(resultData.sequence.name)
+      : fallbackData.sequenceName;
+    let exists = false;
+    let bytes = 0;
+    try {
+      if (outputPath && fs.existsSync(outputPath)) {
+        exists = true;
+        bytes = fs.statSync(outputPath).size || 0;
+      }
+    } catch (errStat) {
+    }
+    return {
+      outputPath,
+      presetPath,
+      sequenceName,
+      exists,
+      bytes
+    };
+  }
+
   function buildScript(fn, payload) {
     const json = JSON.stringify(payload || {});
     const escaped = JSON.stringify(json);
@@ -347,6 +422,7 @@
   const MUTATING_COMMANDS = new Set([
     "reloadProject",
     "saveProject",
+    "exportSequenceDirect",
     "exportSequenceAudio",
     "duplicateSequence",
     "openSequence",
@@ -477,6 +553,62 @@
           file: {
             exists: true,
             bytes
+          }
+        })
+      };
+    }
+    if (command === "exportSequenceDirect") {
+      const prepared = await prepareDirectExportPayload(cleanPayload);
+      if (!prepared.ok) {
+        return { ok: false, error: prepared.error, data: prepared.data || null };
+      }
+      if (dryRun) {
+        return {
+          ok: true,
+          data: {
+            dryRun: true,
+            skipped: true,
+            transport: "cep",
+            sequence: { name: prepared.sequenceName },
+            outputPath: prepared.payload.outputPath,
+            presetPath: prepared.payload.presetPath,
+            workAreaType: prepared.payload.workAreaType
+          }
+        };
+      }
+
+      const exportResult = await evalExtendScript("exportSequenceDirect", prepared.payload);
+      if (!exportResult || !exportResult.ok) {
+        return exportResult || { ok: false, error: "Unknown export failure" };
+      }
+
+      const fileCheck = verifyExportedFile(exportResult.data, {
+        outputPath: prepared.payload.outputPath,
+        presetPath: prepared.payload.presetPath,
+        sequenceName: prepared.sequenceName
+      });
+      if (!fileCheck.exists || fileCheck.bytes <= 0) {
+        return {
+          ok: false,
+          error: "Direct export finished but output file is missing or empty.",
+          data: {
+            transport: "cep",
+            sequence: { name: fileCheck.sequenceName },
+            outputPath: fileCheck.outputPath,
+            presetPath: fileCheck.presetPath
+          }
+        };
+      }
+      return {
+        ok: true,
+        data: Object.assign({}, exportResult.data || {}, {
+          transport: "cep",
+          sequence: (exportResult.data && exportResult.data.sequence) || { name: prepared.sequenceName },
+          outputPath: fileCheck.outputPath,
+          presetPath: fileCheck.presetPath,
+          file: {
+            exists: true,
+            bytes: fileCheck.bytes
           }
         })
       };
