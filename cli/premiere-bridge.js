@@ -15,6 +15,7 @@ Usage:
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
   premiere-bridge export-sequence-direct [--transport cep|auto] (--output /abs/path.ext | --output-dir /abs/dir --filename name.ext) --preset /abs/path.epr [--port N] [--token TOKEN]
+  premiere-bridge export-sequences-direct [--transport cep|auto] (--sequences '[{"name":"Seq A","outputPath":"/abs/path.ext"},{"id":"SEQ-ID","filename":"seq-b.ext"}]' | --sequences-file /abs/path.json) --preset /abs/path.epr [--output-dir /abs/dir] [--filename-extension .ext] [--port N] [--token TOKEN]
   premiere-bridge export-sequence-audio [--transport cep|uxp|auto] [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
@@ -49,6 +50,7 @@ Global:
 Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
   export-sequence-direct is currently CEP-only and requires --preset plus either --output or --output-dir with --filename.
+  export-sequences-direct is currently CEP-only and requires --preset plus explicit sequence JSON. Use item outputPath values or --output-dir with per-item filename / --filename-extension for derived filenames.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -440,6 +442,19 @@ function normalizeRanges(input) {
   return null;
 }
 
+function normalizeSequenceBatchItems(input) {
+  if (Array.isArray(input)) {
+    return input;
+  }
+  if (input && Array.isArray(input.sequences)) {
+    return input.sequences;
+  }
+  if (input && Array.isArray(input.items)) {
+    return input.items;
+  }
+  return null;
+}
+
 function readMarkers(options) {
   if (options.file) {
     const raw = fs.readFileSync(options.file, "utf8");
@@ -484,6 +499,189 @@ function readRanges(options) {
   }
 
   throw new Error("Provide --ranges-file or --ranges");
+}
+
+function readSequenceBatchItems(options) {
+  if (options["sequences-file"]) {
+    const raw = fs.readFileSync(options["sequences-file"], "utf8");
+    const parsed = JSON.parse(raw);
+    const sequences = normalizeSequenceBatchItems(parsed);
+    if (!sequences) {
+      throw new Error("Sequences file must be an array or an object with a sequences/items array");
+    }
+    return sequences;
+  }
+
+  if (options.sequences) {
+    const parsed = JSON.parse(options.sequences);
+    const sequences = normalizeSequenceBatchItems(parsed);
+    if (!sequences) {
+      throw new Error("--sequences must be a JSON array or an object with a sequences/items array");
+    }
+    return sequences;
+  }
+
+  throw new Error("Provide --sequences or --sequences-file");
+}
+
+function normalizeFilenameExtension(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed === ".") {
+    throw new Error("--filename-extension must include a non-empty extension such as .wav");
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("--filename-extension must be an extension only, not a path");
+  }
+  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+}
+
+function normalizeLeafFilename(value, optionName) {
+  const trimmed = value === undefined || value === null ? "" : String(value).trim();
+  if (!trimmed || trimmed === "." || trimmed === ".." || path.basename(trimmed) !== trimmed) {
+    throw new Error(`${optionName} must be a leaf filename such as export.wav`);
+  }
+  return trimmed;
+}
+
+function slugifyFilenameSegment(value) {
+  const text = value ? String(value) : "sequence";
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "sequence";
+}
+
+function summarizeSequenceForBatch(sequence) {
+  const seq = sequence && typeof sequence === "object" ? sequence : {};
+  return {
+    index: seq.index !== undefined ? Number(seq.index) : null,
+    name: seq.name !== undefined && seq.name !== null ? String(seq.name) : null,
+    id: seq.id !== undefined && seq.id !== null ? String(seq.id) : null,
+    binPath: seq.binPath !== undefined && seq.binPath !== null ? String(seq.binPath) : ""
+  };
+}
+
+function summarizeRequestedBatchItem(item) {
+  const raw = item && typeof item === "object" ? item : {};
+  const out = {};
+  if (raw.id !== undefined && raw.id !== null) {
+    out.id = String(raw.id);
+  }
+  if (raw.name !== undefined && raw.name !== null) {
+    out.name = String(raw.name);
+  }
+  if (raw.outputPath !== undefined && raw.outputPath !== null) {
+    out.outputPath = path.resolve(String(raw.outputPath));
+  }
+  if (raw.filename !== undefined && raw.filename !== null) {
+    out.filename = String(raw.filename);
+  }
+  return out;
+}
+
+function describeOutputPath(outputPath) {
+  if (!outputPath) {
+    return {
+      outputPath: null,
+      outputDirectory: null,
+      outputFilename: null
+    };
+  }
+  const resolved = path.resolve(String(outputPath));
+  return {
+    outputPath: resolved,
+    outputDirectory: path.dirname(resolved),
+    outputFilename: path.basename(resolved)
+  };
+}
+
+function readFileStatus(outputPath) {
+  const details = describeOutputPath(outputPath);
+  let exists = false;
+  let bytes = 0;
+  try {
+    if (details.outputPath && fs.existsSync(details.outputPath)) {
+      exists = true;
+      bytes = fs.statSync(details.outputPath).size || 0;
+    }
+  } catch (errStat) {
+  }
+  return {
+    exists,
+    bytes
+  };
+}
+
+function resolveBatchSequence(requested, sequences) {
+  const selector = summarizeRequestedBatchItem(requested);
+  const targetId = selector.id || null;
+  const targetName = selector.name || null;
+  if (!targetId && !targetName) {
+    return {
+      ok: false,
+      error: "Each sequence item must include name, id, or both.",
+      data: { requested: selector }
+    };
+  }
+
+  const matches = (Array.isArray(sequences) ? sequences : []).filter((sequence) => {
+    if (!sequence || typeof sequence !== "object") {
+      return false;
+    }
+    if (targetId && String(sequence.id || "") !== targetId) {
+      return false;
+    }
+    if (targetName && String(sequence.name || "") !== targetName) {
+      return false;
+    }
+    return true;
+  });
+
+  if (matches.length === 1) {
+    return {
+      ok: true,
+      requested: selector,
+      sequence: summarizeSequenceForBatch(matches[0])
+    };
+  }
+
+  const idMatches = targetId
+    ? (Array.isArray(sequences) ? sequences : [])
+        .filter((sequence) => sequence && String(sequence.id || "") === targetId)
+        .map(summarizeSequenceForBatch)
+    : [];
+  const nameMatches = targetName
+    ? (Array.isArray(sequences) ? sequences : [])
+        .filter((sequence) => sequence && String(sequence.name || "") === targetName)
+        .map(summarizeSequenceForBatch)
+    : [];
+
+  let error = "Sequence selector did not match any sequence.";
+  if (matches.length > 1) {
+    error = "Sequence selector matched multiple sequences.";
+  } else if (targetId && targetName && idMatches.length === 1 && nameMatches.length === 1) {
+    error = "Sequence id and name did not resolve to the same sequence.";
+  } else if (targetName && nameMatches.length > 1) {
+    error = "Sequence name matched multiple sequences. Use id or provide a unique selector.";
+  } else if (targetId && idMatches.length === 1 && targetName) {
+    error = "Sequence id matched, but the provided name did not match that sequence.";
+  } else if (targetName && nameMatches.length === 1 && targetId) {
+    error = "Sequence name matched, but the provided id did not match that sequence.";
+  }
+
+  return {
+    ok: false,
+    error,
+    data: {
+      requested: selector,
+      idMatches,
+      nameMatches
+    }
+  };
 }
 
 function getSequenceBounds(inventory) {
@@ -1035,6 +1233,492 @@ async function main() {
     }
     const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "export-sequences-direct") {
+    const sequenceItems = readSequenceBatchItems(args);
+    if (!Array.isArray(sequenceItems) || sequenceItems.length === 0) {
+      throw new Error("export-sequences-direct requires at least one sequence item");
+    }
+    if (args.preset === undefined) {
+      throw new Error("export-sequences-direct requires --preset /abs/path.epr");
+    }
+
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("export-sequences-direct is currently supported only on CEP. Use --transport cep.");
+    }
+
+    const presetPath = path.resolve(String(args.preset));
+    if (!fs.existsSync(presetPath)) {
+      throw new Error(`export-sequences-direct preset not found: ${presetPath}`);
+    }
+    const outputDir = args["output-dir"] !== undefined ? path.resolve(String(args["output-dir"])) : null;
+    const filenameExtension = normalizeFilenameExtension(args["filename-extension"]);
+    const initialResults = sequenceItems.map((item, index) => ({
+      itemIndex: index,
+      requested: summarizeRequestedBatchItem(item),
+      ok: false,
+      stage: "plan",
+      sequence: null,
+      outputPath: null,
+      outputDirectory: null,
+      outputFilename: null,
+      outputPathSource: null,
+      presetPath,
+      file: {
+        exists: false,
+        bytes: 0
+      }
+    }));
+
+    for (let i = 0; i < sequenceItems.length; i += 1) {
+      const item = sequenceItems[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        initialResults[i].error = "Each sequence item must be an object.";
+      }
+    }
+
+    const listFailure = (message, extraData) => ({
+      statusCode: 200,
+      body: {
+        ok: false,
+        error: message,
+        data: Object.assign(
+          {
+            transport: "cep",
+            presetPath,
+            outputDirectory: outputDir,
+            filenameExtension,
+            requestedCount: sequenceItems.length,
+            exportedCount: 0,
+            failedCount: sequenceItems.length,
+            results: initialResults
+          },
+          extraData || {}
+        )
+      }
+    });
+
+    let listResult;
+    try {
+      listResult = await sendCommandCep(config, "listSequences", {});
+    } catch (errList) {
+      console.log(JSON.stringify(listFailure(`Failed to list sequences before batch export: ${errList.message}`), null, 2));
+      return;
+    }
+
+    if (!listResult || !listResult.body || listResult.body.ok !== true) {
+      console.log(
+        JSON.stringify(
+          listFailure("Failed to list sequences before batch export.", {
+            stage: "listSequences",
+            bridge: listResult && listResult.body ? listResult.body : listResult
+          }),
+          null,
+          2
+        )
+      );
+      return;
+    }
+
+    const listData = listResult.body.data && typeof listResult.body.data === "object" ? listResult.body.data : {};
+    const availableSequences = Array.isArray(listData.sequences) ? listData.sequences : [];
+    const activeSequenceBefore = listData.active && typeof listData.active === "object"
+      ? {
+          id: listData.active.id !== undefined && listData.active.id !== null ? String(listData.active.id) : null,
+          name: listData.active.name !== undefined && listData.active.name !== null ? String(listData.active.name) : null
+        }
+      : { id: null, name: null };
+
+    const plannedResults = sequenceItems.map((item, index) => {
+      const requested = summarizeRequestedBatchItem(item);
+      const baseResult = {
+        itemIndex: index,
+        requested,
+        ok: false,
+        stage: "resolve-sequence",
+        sequence: null,
+        outputPath: null,
+        outputDirectory: null,
+        outputFilename: null,
+        outputPathSource: null,
+        presetPath,
+        file: {
+          exists: false,
+          bytes: 0
+        }
+      };
+
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return Object.assign(baseResult, { error: "Each sequence item must be an object." });
+      }
+
+      const resolved = resolveBatchSequence(item, availableSequences);
+      if (!resolved.ok) {
+        return Object.assign(baseResult, {
+          error: resolved.error,
+          matches: resolved.data || null
+        });
+      }
+
+      return Object.assign(baseResult, {
+        sequence: resolved.sequence
+      });
+    });
+
+    const derivedSlugCounts = new Map();
+    for (const planned of plannedResults) {
+      if (!planned.sequence || !planned.requested || planned.requested.outputPath || planned.requested.filename) {
+        continue;
+      }
+      const slug = slugifyFilenameSegment(planned.sequence.name || planned.sequence.id || `sequence-${planned.itemIndex + 1}`);
+      derivedSlugCounts.set(slug, (derivedSlugCounts.get(slug) || 0) + 1);
+    }
+
+    const usedDerivedBases = new Map();
+    for (let i = 0; i < plannedResults.length; i += 1) {
+      const planned = plannedResults[i];
+      if (!planned.sequence) {
+        continue;
+      }
+      const requested = planned.requested;
+
+      try {
+        if (requested.outputPath) {
+          const details = describeOutputPath(requested.outputPath);
+          planned.outputPath = details.outputPath;
+          planned.outputDirectory = details.outputDirectory;
+          planned.outputFilename = details.outputFilename;
+          planned.outputPathSource = "item-output-path";
+          planned.exportPayload = {
+            outputPath: details.outputPath,
+            presetPath,
+            outputPathSource: planned.outputPathSource
+          };
+        } else if (requested.filename !== undefined) {
+          if (!outputDir) {
+            throw new Error("Per-sequence filename requires --output-dir /abs/dir.");
+          }
+          const filename = normalizeLeafFilename(requested.filename, "sequence filename");
+          planned.outputPath = path.join(outputDir, filename);
+          planned.outputDirectory = outputDir;
+          planned.outputFilename = filename;
+          planned.outputPathSource = "item-filename-and-output-dir";
+          planned.exportPayload = {
+            outputDir,
+            filename,
+            presetPath,
+            outputPathSource: planned.outputPathSource
+          };
+        } else {
+          if (!outputDir) {
+            throw new Error("Missing output target. Provide item outputPath values or use --output-dir /abs/dir.");
+          }
+          if (!filenameExtension) {
+            throw new Error("Derived batch filenames require --filename-extension when using --output-dir.");
+          }
+          const slug = slugifyFilenameSegment(planned.sequence.name || planned.sequence.id || `sequence-${planned.itemIndex + 1}`);
+          let filenameBase = slug;
+          if ((derivedSlugCounts.get(slug) || 0) > 1) {
+            const discriminatorSource = planned.sequence.id || `sequence-${planned.sequence.index !== null ? planned.sequence.index + 1 : planned.itemIndex + 1}`;
+            filenameBase = `${slug}-${slugifyFilenameSegment(discriminatorSource)}`;
+          }
+          const usageCount = (usedDerivedBases.get(filenameBase) || 0) + 1;
+          usedDerivedBases.set(filenameBase, usageCount);
+          if (usageCount > 1) {
+            filenameBase = `${filenameBase}-${usageCount}`;
+          }
+          const filename = `${filenameBase}${filenameExtension}`;
+          planned.outputPath = path.join(outputDir, filename);
+          planned.outputDirectory = outputDir;
+          planned.outputFilename = filename;
+          planned.outputPathSource = "output-dir-and-derived-filename";
+          planned.exportPayload = {
+            outputDir,
+            filename,
+            presetPath,
+            outputPathSource: planned.outputPathSource
+          };
+        }
+      } catch (errPlan) {
+        planned.error = errPlan.message;
+        planned.stage = "resolve-output";
+        planned.exportPayload = null;
+      }
+    }
+
+    if (dryRun) {
+      const dryRunResults = plannedResults.map((planned) => {
+        const file = readFileStatus(planned.outputPath);
+        return Object.assign({}, planned, {
+          ok: !planned.error,
+          skipped: true,
+          dryRun: true,
+          stage: planned.error ? planned.stage : "dry-run",
+          file
+        });
+      });
+      const failedCount = dryRunResults.filter((item) => !item.ok).length;
+      console.log(
+        JSON.stringify(
+          {
+            statusCode: 200,
+            body: failedCount === 0
+              ? {
+                  ok: true,
+                  data: {
+                    transport: "cep",
+                    dryRun: true,
+                    skipped: true,
+                    presetPath,
+                    outputDirectory: outputDir,
+                    filenameExtension,
+                    requestedCount: dryRunResults.length,
+                    exportedCount: 0,
+                    failedCount,
+                    activeSequenceBefore,
+                    restore: {
+                      skipped: true,
+                      reason: "dry-run"
+                    },
+                    results: dryRunResults
+                  }
+                }
+              : {
+                  ok: false,
+                  error: "One or more batch export items failed validation.",
+                  data: {
+                    transport: "cep",
+                    dryRun: true,
+                    skipped: true,
+                    presetPath,
+                    outputDirectory: outputDir,
+                    filenameExtension,
+                    requestedCount: dryRunResults.length,
+                    exportedCount: 0,
+                    failedCount,
+                    activeSequenceBefore,
+                    restore: {
+                      skipped: true,
+                      reason: "dry-run"
+                    },
+                    results: dryRunResults
+                  }
+                }
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
+
+    const results = [];
+    let exportedCount = 0;
+
+    for (const planned of plannedResults) {
+      if (planned.error || !planned.exportPayload || !planned.sequence) {
+        results.push(
+          Object.assign({}, planned, {
+            ok: false,
+            skipped: false,
+            file: readFileStatus(planned.outputPath)
+          })
+        );
+        continue;
+      }
+
+      const openPayload = {};
+      if (planned.sequence && planned.sequence.id) {
+        openPayload.id = planned.sequence.id;
+      } else if (planned.sequence && planned.sequence.name) {
+        openPayload.name = planned.sequence.name;
+      }
+
+      let openResult;
+      try {
+        openResult = await sendCommandCep(config, "openSequence", openPayload);
+      } catch (errOpen) {
+        results.push(
+          Object.assign({}, planned, {
+            ok: false,
+            stage: "open-sequence",
+            error: `Failed to open sequence: ${errOpen.message}`,
+            file: readFileStatus(planned.outputPath)
+          })
+        );
+        continue;
+      }
+
+      const openBody = openResult && openResult.body && typeof openResult.body === "object"
+        ? openResult.body
+        : null;
+      if (!openBody || openBody.ok !== true) {
+        results.push(
+          Object.assign({}, planned, {
+            ok: false,
+            stage: "open-sequence",
+            error: openBody && openBody.error ? String(openBody.error) : "Failed to open sequence.",
+            bridge: openBody && openBody.data ? openBody.data : openBody,
+            file: readFileStatus(planned.outputPath)
+          })
+        );
+        continue;
+      }
+
+      let exportResult;
+      try {
+        exportResult = await sendCommandCep(config, "exportSequenceDirect", planned.exportPayload);
+      } catch (errExport) {
+        results.push(
+          Object.assign({}, planned, {
+            ok: false,
+            stage: "export-sequence-direct",
+            error: `Failed to export sequence: ${errExport.message}`,
+            file: readFileStatus(planned.outputPath)
+          })
+        );
+        continue;
+      }
+
+      const exportBody = exportResult && exportResult.body && typeof exportResult.body === "object"
+        ? exportResult.body
+        : null;
+      const exportData = exportBody && exportBody.data && typeof exportBody.data === "object" ? exportBody.data : {};
+      const outputPath = exportData.outputPath || planned.outputPath;
+      const outputDetails = describeOutputPath(outputPath);
+      const file = readFileStatus(outputDetails.outputPath);
+      const exportOk = !!(exportBody && exportBody.ok === true);
+      const fileOk = file.exists && file.bytes > 0;
+      const itemOk = exportOk && fileOk;
+      const itemResult = Object.assign({}, planned, {
+        ok: itemOk,
+        stage: itemOk ? "exported" : (exportOk ? "verify-output" : "export-sequence-direct"),
+        sequence: exportData.sequence && typeof exportData.sequence === "object"
+          ? Object.assign({}, planned.sequence, {
+              name: exportData.sequence.name !== undefined && exportData.sequence.name !== null
+                ? String(exportData.sequence.name)
+                : planned.sequence.name
+            })
+          : planned.sequence,
+        outputPath: outputDetails.outputPath,
+        outputDirectory: outputDetails.outputDirectory,
+        outputFilename: outputDetails.outputFilename,
+        outputPathSource: planned.outputPathSource || exportData.outputPathSource || null,
+        method: exportData.method || null,
+        file,
+        error: itemOk
+          ? null
+          : (exportOk
+              ? "Direct export finished but output file is missing or empty."
+              : (exportBody && exportBody.error ? String(exportBody.error) : "Direct export failed.")),
+        bridge: itemOk ? null : exportData
+      });
+      if (itemResult.ok) {
+        exportedCount += 1;
+      }
+      results.push(itemResult);
+    }
+
+    let restore = {
+      skipped: true,
+      reason: "No active sequence was recorded before batch export."
+    };
+    let restoreFailed = false;
+
+    if (activeSequenceBefore && (activeSequenceBefore.id || activeSequenceBefore.name)) {
+      const restorePayload = {};
+      if (activeSequenceBefore.id) {
+        restorePayload.id = activeSequenceBefore.id;
+      } else if (activeSequenceBefore.name) {
+        restorePayload.name = activeSequenceBefore.name;
+      }
+
+      try {
+        const restoreResult = await sendCommandCep(config, "openSequence", restorePayload);
+        const restoreBody = restoreResult && restoreResult.body && typeof restoreResult.body === "object"
+          ? restoreResult.body
+          : null;
+        if (restoreBody && restoreBody.ok === true) {
+          restore = {
+            skipped: false,
+            ok: true,
+            sequence: restoreBody.data && restoreBody.data.sequence ? restoreBody.data.sequence : restorePayload,
+            methods: restoreBody.data && restoreBody.data.methods ? restoreBody.data.methods : null
+          };
+        } else {
+          restoreFailed = true;
+          restore = {
+            skipped: false,
+            ok: false,
+            error: restoreBody && restoreBody.error ? String(restoreBody.error) : "Failed to restore previously active sequence."
+          };
+        }
+      } catch (errRestore) {
+        restoreFailed = true;
+        restore = {
+          skipped: false,
+          ok: false,
+          error: `Failed to restore previously active sequence: ${errRestore.message}`
+        };
+      }
+    }
+
+    const failedCount = results.filter((item) => !item.ok).length;
+    const overallOk = failedCount === 0 && !restoreFailed;
+    let overallError = null;
+    if (failedCount > 0 && restoreFailed) {
+      overallError = "One or more batch exports failed, and restoring the previously active sequence failed.";
+    } else if (failedCount > 0) {
+      overallError = "One or more batch exports failed.";
+    } else if (restoreFailed) {
+      overallError = "Batch exports completed, but restoring the previously active sequence failed.";
+    }
+    console.log(
+      JSON.stringify(
+        {
+          statusCode: 200,
+          body: overallOk
+            ? {
+                ok: true,
+                data: {
+                  transport: "cep",
+                  presetPath,
+                  outputDirectory: outputDir,
+                  filenameExtension,
+                  requestedCount: results.length,
+                  exportedCount,
+                  failedCount,
+                  restoreFailed,
+                  activeSequenceBefore,
+                  restore,
+                  results
+                }
+              }
+            : {
+                ok: false,
+                error: overallError,
+                data: {
+                  transport: "cep",
+                  presetPath,
+                  outputDirectory: outputDir,
+                  filenameExtension,
+                  requestedCount: results.length,
+                  exportedCount,
+                  failedCount,
+                  restoreFailed,
+                  activeSequenceBefore,
+                  restore,
+                  results
+                }
+              }
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 
