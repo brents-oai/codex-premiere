@@ -2465,7 +2465,12 @@ PremiereBridge._exportSequenceWithPreset = function (payload, options) {
     var outputFile = new File(outputPath);
     var outputDir = outputFile.parent;
     if (!outputDir || (!outputDir.exists && !outputDir.create())) {
-      return PremiereBridge._err("Failed to create output directory", { outputPath: outputPath });
+      return PremiereBridge._err("Failed to create output directory", {
+        outputPath: outputPath,
+        outputDirectory: outputDir ? outputDir.fsName : null,
+        outputFilename: outputFile ? outputFile.name : null,
+        outputPathSource: cleanPayload.outputPathSource ? String(cleanPayload.outputPathSource) : null
+      });
     }
 
     var presetFile = new File(presetPath);
@@ -2507,7 +2512,10 @@ PremiereBridge._exportSequenceWithPreset = function (payload, options) {
         cleanOptions.failureLabel ? String(cleanOptions.failureLabel) : "Failed to export active sequence",
         {
         outputPath: outputFile.fsName,
+        outputDirectory: outputDir ? outputDir.fsName : null,
+        outputFilename: outputFile ? outputFile.name : null,
         presetPath: presetFile.fsName,
+        outputPathSource: cleanPayload.outputPathSource ? String(cleanPayload.outputPathSource) : null,
         workAreaType: workAreaType,
         methodsTried: methodsTried,
         errors: errors
@@ -2531,7 +2539,10 @@ PremiereBridge._exportSequenceWithPreset = function (payload, options) {
         name: sequence.name ? String(sequence.name) : null
       },
       outputPath: outputFile.fsName,
+      outputDirectory: outputDir ? outputDir.fsName : null,
+      outputFilename: outputFile ? outputFile.name : null,
       presetPath: presetFile.fsName,
+      outputPathSource: cleanPayload.outputPathSource ? String(cleanPayload.outputPathSource) : null,
       method: method,
       workAreaType: workAreaType,
       rawResult: rawResult,
