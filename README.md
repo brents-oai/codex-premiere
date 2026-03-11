@@ -46,7 +46,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js ping
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
-./cli/premiere-bridge.js export-sequence-direct --transport cep --output /ABS/PATH/active-sequence.wav --preset /ABS/PATH/audio-48k.epr
+./cli/premiere-bridge.js export-sequence-direct --transport cep --output-dir /ABS/PATH --filename active-sequence.wav --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport cep --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport uxp --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js duplicate-sequence --name "Rough Cut"
@@ -96,7 +96,7 @@ Color indices:
 - `ping`
 - `reload-project`
 - `save-project`
-- `export-sequence-direct` (CEP only; requires `--output` and `--preset`)
+- `export-sequence-direct` (CEP only; requires `--preset` plus either `--output` or `--output-dir` + `--filename`)
 - `export-sequence-audio` (requires `--transport cep|uxp`)
 - `duplicate-sequence`
 - `list-sequences`
@@ -223,30 +223,45 @@ Example response when the bridge is stale and the CLI promotes the UI value:
 
 ## Direct Sequence Export (CEP)
 
-Export the active sequence immediately on the CEP path with an explicit output path and explicit Adobe Media Encoder preset.
+Export the active sequence immediately on the CEP path with an explicit Adobe Media Encoder preset and an explicit output target. You can provide either a full `--output` path or compose it from `--output-dir` plus `--filename`.
 
 ```bash
 ./cli/premiere-bridge.js export-sequence-direct \
   --transport cep \
-  --output /ABS/PATH/active-sequence.wav \
+  --output-dir /ABS/PATH/exports \
+  --filename active-sequence.wav \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+Alternative explicit path form:
+
+```bash
+./cli/premiere-bridge.js export-sequence-direct \
+  --transport cep \
+  --output /ABS/PATH/exports/active-sequence.wav \
   --preset /ABS/PATH/audio-48k.epr
 ```
 
 Required args:
-- `--output /ABS/PATH/output.ext`
 - `--preset /ABS/PATH/export-preset.epr`
+- `--output /ABS/PATH/output.ext`, or
+- `--output-dir /ABS/PATH/output-dir` together with `--filename output.ext`
 
 Optional args:
 - `--dry-run`
 
 Current limitation:
 - `export-sequence-direct` is currently supported only on the CEP path. `--transport uxp` returns an explicit CLI error.
-- The command does not invent a default output filename. Provide `--output` explicitly; shared default output-path behavior remains coupled to issue `#42`.
+- The command does not invent a default filename or output directory. Provide either `--output` or both `--output-dir` and `--filename`.
+- `--filename` must be a leaf filename such as `active-sequence.wav`, not a nested path.
 
 Expected response fields include:
 - `transport`
 - `sequence.name`
 - `outputPath`
+- `outputDirectory`
+- `outputFilename`
+- `outputPathSource` (`explicit-output-path` or `output-dir-and-filename`)
 - `presetPath`
 - `method`
 - `file.exists`

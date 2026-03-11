@@ -238,6 +238,22 @@
     ].join("");
   }
 
+  function describeOutputPath(outputPath) {
+    if (!outputPath) {
+      return {
+        outputPath: null,
+        outputDirectory: null,
+        outputFilename: null
+      };
+    }
+    const resolved = path.resolve(String(outputPath));
+    return {
+      outputPath: resolved,
+      outputDirectory: path.dirname(resolved),
+      outputFilename: path.basename(resolved)
+    };
+  }
+
   function resolveAudioPresetPath(payload) {
     const rawCandidates = [
       payload && payload.presetPath,
@@ -328,15 +344,43 @@
     } catch (errInfo) {
     }
 
-    if (!clean.outputPath) {
-      return { ok: false, error: "Missing outputPath. Provide --output /abs/path.ext." };
+    const hasOutputPath = !!clean.outputPath;
+    const hasOutputDir = !!clean.outputDir;
+    const hasFilename = !!clean.filename;
+
+    if (hasOutputPath && (hasOutputDir || hasFilename)) {
+      return {
+        ok: false,
+        error: "Provide either --output /abs/path.ext or --output-dir /abs/dir with --filename name.ext, not both."
+      };
+    }
+    if (!hasOutputPath && (!hasOutputDir || !hasFilename)) {
+      return {
+        ok: false,
+        error: "Missing output target. Provide --output /abs/path.ext or both --output-dir /abs/dir and --filename name.ext."
+      };
     }
     if (!clean.presetPath) {
       return { ok: false, error: "Missing presetPath. Provide --preset /abs/path.epr." };
     }
 
-    const outputPath = path.resolve(String(clean.outputPath));
+    let outputPathSource = "explicit-output-path";
+    let outputPath = null;
+    if (hasOutputPath) {
+      outputPath = path.resolve(String(clean.outputPath));
+    } else {
+      const filename = String(clean.filename).trim();
+      if (!filename || filename === "." || filename === ".." || path.basename(filename) !== filename) {
+        return {
+          ok: false,
+          error: "Invalid filename. Provide a leaf filename such as export.wav."
+        };
+      }
+      outputPath = path.join(path.resolve(String(clean.outputDir)), filename);
+      outputPathSource = "output-dir-and-filename";
+    }
     const presetPath = path.resolve(String(clean.presetPath));
+    const outputDetails = describeOutputPath(outputPath);
 
     try {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -355,11 +399,15 @@
     return {
       ok: true,
       payload: {
-        outputPath,
+        outputPath: outputDetails.outputPath,
         presetPath,
-        workAreaType: clean.workAreaType !== undefined ? Number(clean.workAreaType) : 0
+        workAreaType: clean.workAreaType !== undefined ? Number(clean.workAreaType) : 0,
+        outputPathSource
       },
-      sequenceName
+      sequenceName,
+      outputPathSource,
+      outputDirectory: outputDetails.outputDirectory,
+      outputFilename: outputDetails.outputFilename
     };
   }
 
@@ -371,9 +419,13 @@
     const presetPath = resultData && resultData.presetPath
       ? String(resultData.presetPath)
       : fallbackData.presetPath;
+    const outputPathSource = resultData && resultData.outputPathSource
+      ? String(resultData.outputPathSource)
+      : (fallbackData.outputPathSource || null);
     const sequenceName = resultData && resultData.sequence && resultData.sequence.name
       ? String(resultData.sequence.name)
       : fallbackData.sequenceName;
+    const outputDetails = describeOutputPath(outputPath);
     let exists = false;
     let bytes = 0;
     try {
@@ -384,8 +436,11 @@
     } catch (errStat) {
     }
     return {
-      outputPath,
+      outputPath: outputDetails.outputPath,
+      outputDirectory: outputDetails.outputDirectory,
+      outputFilename: outputDetails.outputFilename,
       presetPath,
+      outputPathSource,
       sequenceName,
       exists,
       bytes
@@ -571,8 +626,11 @@
             transport: "cep",
             sequence: { name: prepared.sequenceName },
             outputPath: prepared.payload.outputPath,
+            outputDirectory: prepared.outputDirectory,
+            outputFilename: prepared.outputFilename,
             presetPath: prepared.payload.presetPath,
-            workAreaType: prepared.payload.workAreaType
+            workAreaType: prepared.payload.workAreaType,
+            outputPathSource: prepared.outputPathSource
           }
         };
       }
@@ -595,7 +653,10 @@
             transport: "cep",
             sequence: { name: fileCheck.sequenceName },
             outputPath: fileCheck.outputPath,
-            presetPath: fileCheck.presetPath
+            outputDirectory: fileCheck.outputDirectory,
+            outputFilename: fileCheck.outputFilename,
+            presetPath: fileCheck.presetPath,
+            outputPathSource: fileCheck.outputPathSource
           }
         };
       }
@@ -605,7 +666,10 @@
           transport: "cep",
           sequence: (exportResult.data && exportResult.data.sequence) || { name: prepared.sequenceName },
           outputPath: fileCheck.outputPath,
+          outputDirectory: fileCheck.outputDirectory,
+          outputFilename: fileCheck.outputFilename,
           presetPath: fileCheck.presetPath,
+          outputPathSource: fileCheck.outputPathSource,
           file: {
             exists: true,
             bytes: fileCheck.bytes

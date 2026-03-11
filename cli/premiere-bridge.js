@@ -14,7 +14,7 @@ Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
-  premiere-bridge export-sequence-direct [--transport cep|auto] --output /abs/path.ext --preset /abs/path.epr [--port N] [--token TOKEN]
+  premiere-bridge export-sequence-direct [--transport cep|auto] (--output /abs/path.ext | --output-dir /abs/dir --filename name.ext) --preset /abs/path.epr [--port N] [--token TOKEN]
   premiere-bridge export-sequence-audio [--transport cep|uxp|auto] [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
@@ -48,7 +48,7 @@ Global:
 
 Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
-  export-sequence-direct is currently CEP-only and requires explicit --output and --preset.
+  export-sequence-direct is currently CEP-only and requires --preset plus either --output or --output-dir with --filename.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -1039,8 +1039,14 @@ async function main() {
   }
 
   if (command === "export-sequence-direct") {
-    if (args.output === undefined) {
-      throw new Error("export-sequence-direct requires --output /abs/path.ext");
+    const hasOutput = args.output !== undefined;
+    const hasOutputDir = args["output-dir"] !== undefined;
+    const hasFilename = args.filename !== undefined;
+    if (hasOutput && (hasOutputDir || hasFilename)) {
+      throw new Error("export-sequence-direct accepts either --output /abs/path.ext or --output-dir /abs/dir with --filename name.ext, not both");
+    }
+    if (!hasOutput && (!hasOutputDir || !hasFilename)) {
+      throw new Error("export-sequence-direct requires either --output /abs/path.ext or both --output-dir /abs/dir and --filename name.ext");
     }
     if (args.preset === undefined) {
       throw new Error("export-sequence-direct requires --preset /abs/path.epr");
@@ -1050,9 +1056,14 @@ async function main() {
       throw new Error("export-sequence-direct is currently supported only on CEP. Use --transport cep.");
     }
     const payload = {
-      outputPath: path.resolve(String(args.output)),
       presetPath: path.resolve(String(args.preset))
     };
+    if (hasOutput) {
+      payload.outputPath = path.resolve(String(args.output));
+    } else {
+      payload.outputDir = path.resolve(String(args["output-dir"]));
+      payload.filename = String(args.filename);
+    }
     const result = await sendCommandCep(config, "exportSequenceDirect", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
