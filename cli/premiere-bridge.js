@@ -14,6 +14,7 @@ Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
+  premiere-bridge export-sequence-direct [--transport cep|auto] --output /abs/path.ext --preset /abs/path.epr [--port N] [--token TOKEN]
   premiere-bridge export-sequence-audio [--transport cep|uxp|auto] [--output /abs/path.wav] [--preset /abs/path.epr] [--timeout-seconds N] [--port N] [--token TOKEN]
   premiere-bridge duplicate-sequence [--name NAME] [--port N] [--token TOKEN]
   premiere-bridge list-sequences [--port N] [--token TOKEN]
@@ -47,6 +48,7 @@ Global:
 
 Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
+  export-sequence-direct is currently CEP-only and requires explicit --output and --preset.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -1032,6 +1034,26 @@ async function main() {
       payload.timeoutSeconds = timeoutSeconds;
     }
     const result = await sendCommand(config, "exportSequenceAudio", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "export-sequence-direct") {
+    if (args.output === undefined) {
+      throw new Error("export-sequence-direct requires --output /abs/path.ext");
+    }
+    if (args.preset === undefined) {
+      throw new Error("export-sequence-direct requires --preset /abs/path.epr");
+    }
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("export-sequence-direct is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = {
+      outputPath: path.resolve(String(args.output)),
+      presetPath: path.resolve(String(args.preset))
+    };
+    const result = await sendCommandCep(config, "exportSequenceDirect", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

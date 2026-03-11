@@ -46,6 +46,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js ping
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
+./cli/premiere-bridge.js export-sequence-direct --transport cep --output /ABS/PATH/active-sequence.wav --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport cep --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js export-sequence-audio --transport uxp --preset /ABS/PATH/audio-48k.epr
 ./cli/premiere-bridge.js duplicate-sequence --name "Rough Cut"
@@ -95,6 +96,7 @@ Color indices:
 - `ping`
 - `reload-project`
 - `save-project`
+- `export-sequence-direct` (CEP only; requires `--output` and `--preset`)
 - `export-sequence-audio` (requires `--transport cep|uxp`)
 - `duplicate-sequence`
 - `list-sequences`
@@ -218,6 +220,38 @@ Example response when the bridge is stale and the CLI promotes the UI value:
   }
 }
 ```
+
+## Direct Sequence Export (CEP)
+
+Export the active sequence immediately on the CEP path with an explicit output path and explicit Adobe Media Encoder preset.
+
+```bash
+./cli/premiere-bridge.js export-sequence-direct \
+  --transport cep \
+  --output /ABS/PATH/active-sequence.wav \
+  --preset /ABS/PATH/audio-48k.epr
+```
+
+Required args:
+- `--output /ABS/PATH/output.ext`
+- `--preset /ABS/PATH/export-preset.epr`
+
+Optional args:
+- `--dry-run`
+
+Current limitation:
+- `export-sequence-direct` is currently supported only on the CEP path. `--transport uxp` returns an explicit CLI error.
+- The command does not invent a default output filename. Provide `--output` explicitly; shared default output-path behavior remains coupled to issue `#42`.
+
+Expected response fields include:
+- `transport`
+- `sequence.name`
+- `outputPath`
+- `presetPath`
+- `method`
+- `file.exists`
+- `file.bytes`
+- `durationSeconds` (if available)
 
 ## Sequence Audio Export (CEP + UXP)
 
