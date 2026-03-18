@@ -482,6 +482,7 @@
     "duplicateSequence",
     "openSequence",
     "insertClip",
+    "overwriteClip",
     "addMarkers",
     "addMarkersFromFile",
     "setPlayheadTimecode",
@@ -683,6 +684,12 @@
         return evalExtendScript("insertClip", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("insertClip", cleanPayload);
+    }
+    if (command === "overwriteClip") {
+      if (dryRun) {
+        return evalExtendScript("overwriteClip", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("overwriteClip", cleanPayload);
     }
     if (dryRun && MUTATING_COMMANDS.has(command)) {
       return {
