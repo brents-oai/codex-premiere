@@ -55,6 +55,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js open-sequence --name "Rough Cut"
 ./cli/premiere-bridge.js find-item --name "C0114.MP4" --contains --limit 5
 ./cli/premiere-bridge.js insert-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
+./cli/premiere-bridge.js overwrite-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
@@ -106,6 +107,7 @@ Color indices:
 - `open-sequence`
 - `find-item`
 - `insert-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
+- `overwrite-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`
@@ -248,6 +250,32 @@ You can also place the clip at an explicit time instead of the playhead:
   --item-id 123456 \
   --video-track-index 0 \
   --audio-track-index 0 \
+  --timecode "00;00;10;00"
+```
+
+## Overwrite Clip (CEP)
+
+Overwrite media at the target location on explicit destination tracks. Use `find-item` first and pass the returned `nodeId`/`id` as `--item-id`.
+
+```bash
+./cli/premiere-bridge.js find-item --name "C0114.MP4" --contains --limit 1
+
+./cli/premiere-bridge.js overwrite-clip \
+  --transport cep \
+  --item-id 123456 \
+  --video-track-index 0 \
+  --audio-track-index 0 \
+  --at playhead
+```
+
+You can also overwrite at an explicit time instead of the playhead:
+
+```bash
+./cli/premiere-bridge.js overwrite-clip \
+  --transport cep \
+  --item-id 123456 \
+  --video-track-index 1 \
+  --audio-track-index 1 \
   --timecode "00;00;10;00"
 ```
 
