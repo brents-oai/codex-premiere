@@ -481,6 +481,7 @@
     "exportSequenceAudio",
     "duplicateSequence",
     "openSequence",
+    "insertClip",
     "addMarkers",
     "addMarkersFromFile",
     "setPlayheadTimecode",
@@ -676,6 +677,12 @@
           }
         })
       };
+    }
+    if (command === "insertClip") {
+      if (dryRun) {
+        return evalExtendScript("insertClip", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("insertClip", cleanPayload);
     }
     if (dryRun && MUTATING_COMMANDS.has(command)) {
       return {

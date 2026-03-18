@@ -21,6 +21,7 @@ Usage:
   premiere-bridge list-sequences [--port N] [--token TOKEN]
   premiere-bridge open-sequence (--name NAME | --id ID) [--port N] [--token TOKEN]
   premiere-bridge find-item (--name NAME | --path BIN/ITEM) [--contains] [--case-sensitive] [--limit N] [--port N] [--token TOKEN]
+  premiere-bridge insert-clip --item-id ID --video-track-index N --audio-track-index N (--at playhead | --timecode 00;00;10;00 | --seconds S | --ticks N) [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
@@ -51,6 +52,7 @@ Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
   export-sequence-direct is currently CEP-only and requires --preset plus either --output or --output-dir with --filename.
   export-sequences-direct is currently CEP-only and requires --preset plus explicit sequence JSON. Use item outputPath values or --output-dir with per-item filename / --filename-extension for derived filenames.
+  insert-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -1197,6 +1199,82 @@ async function main() {
       payload.limit = Math.round(limit);
     }
     const result = await sendCommand(config, "findProjectItem", payload);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "insert-clip") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("insert-clip is currently supported only on CEP. Use --transport cep.");
+    }
+    if (args["item-id"] === undefined || args["item-id"] === null || String(args["item-id"]).trim() === "") {
+      throw new Error("Provide --item-id for insert-clip");
+    }
+
+    const videoTrackIndex = numericOrNull(args["video-track-index"]);
+    const audioTrackIndex = numericOrNull(args["audio-track-index"]);
+    if (videoTrackIndex === null || videoTrackIndex < 0 || Math.floor(videoTrackIndex) !== videoTrackIndex) {
+      throw new Error("--video-track-index must be a non-negative integer");
+    }
+    if (audioTrackIndex === null || audioTrackIndex < 0 || Math.floor(audioTrackIndex) !== audioTrackIndex) {
+      throw new Error("--audio-track-index must be a non-negative integer");
+    }
+
+    const locationKeys = [
+      args.at !== undefined ? "at" : null,
+      args.timecode !== undefined ? "timecode" : null,
+      args.seconds !== undefined ? "seconds" : null,
+      args.ticks !== undefined ? "ticks" : null
+    ].filter(Boolean);
+    if (locationKeys.length !== 1) {
+      throw new Error("Provide exactly one insert location: --at playhead, --timecode, --seconds, or --ticks");
+    }
+
+    const payload = {
+      itemId: String(args["item-id"]),
+      videoTrackIndex,
+      audioTrackIndex
+    };
+    if (args.at !== undefined) {
+      const at = String(args.at).toLowerCase();
+      if (at !== "playhead") {
+        throw new Error("--at currently supports only 'playhead'");
+      }
+      payload.at = "playhead";
+      const playheadResult = await sendCommand(config, "getPlayheadPosition", {});
+      await maybeVerifyPlayheadWithUi(config, playheadResult);
+      if (!playheadResult.body || playheadResult.body.ok !== true || !playheadResult.body.data) {
+        throw new Error(
+          `Failed to resolve playhead for insert-clip: ${playheadResult.body && playheadResult.body.error}`
+        );
+      }
+      payload.ticks = Number(playheadResult.body.data.ticks);
+      if (playheadResult.body.data.timecode) {
+        payload.timecode = String(playheadResult.body.data.timecode);
+      }
+      if (playheadResult.body.data.source) {
+        payload.playheadSource = String(playheadResult.body.data.source);
+      }
+      if (playheadResult.body.data.method) {
+        payload.playheadMethod = String(playheadResult.body.data.method);
+      }
+    } else if (args.timecode !== undefined) {
+      payload.timecode = String(args.timecode);
+    } else if (args.seconds !== undefined) {
+      const seconds = Number(args.seconds);
+      if (!Number.isFinite(seconds) || seconds < 0) {
+        throw new Error("--seconds must be a non-negative number");
+      }
+      payload.seconds = seconds;
+    } else if (args.ticks !== undefined) {
+      const ticks = Number(args.ticks);
+      if (!Number.isFinite(ticks) || ticks < 0) {
+        throw new Error("--ticks must be a non-negative number");
+      }
+      payload.ticks = ticks;
+    }
+
+    const result = await sendCommandCep(config, "insertClip", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
