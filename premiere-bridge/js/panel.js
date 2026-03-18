@@ -486,6 +486,8 @@
     "addMarkers",
     "addMarkersFromFile",
     "setPlayheadTimecode",
+    "setInPoint",
+    "setOutPoint",
     "setInOutPoints",
     "extractRange",
     "rippleDeleteSelection",
@@ -690,6 +692,18 @@
         return evalExtendScript("overwriteClip", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("overwriteClip", cleanPayload);
+    }
+    if (command === "setInPoint") {
+      if (dryRun) {
+        return evalExtendScript("setInPoint", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("setInPoint", cleanPayload);
+    }
+    if (command === "setOutPoint") {
+      if (dryRun) {
+        return evalExtendScript("setOutPoint", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("setOutPoint", cleanPayload);
     }
     if (dryRun && MUTATING_COMMANDS.has(command)) {
       return {

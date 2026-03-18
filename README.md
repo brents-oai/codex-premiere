@@ -63,6 +63,8 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js get-playhead
 ./cli/premiere-bridge.js debug-timecode --timecode 00;02;00;00
 ./cli/premiere-bridge.js set-playhead --timecode 00;00;10;00
+./cli/premiere-bridge.js set-in-point --timecode "00;00;10;00"
+./cli/premiere-bridge.js set-out-point --timecode "00;00;20;00"
 ./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
 ./cli/premiere-bridge.js extract-range --in "00;00;10;00" --out "00;00;20;00"
 ./cli/premiere-bridge.js ripple-delete-selection
@@ -115,6 +117,8 @@ Color indices:
 - `get-playhead`
 - `debug-timecode`
 - `set-playhead`
+- `set-in-point` (CEP only; preserves the current out point)
+- `set-out-point` (CEP only; preserves the current in point)
 - `set-in-out`
 - `extract-range`
 - `ripple-delete-selection`
@@ -225,6 +229,28 @@ Example response when the bridge is stale and the CLI promotes the UI value:
     }
   }
 }
+```
+
+## Set In/Out Points
+
+Use the standalone commands when you want to move only one boundary and preserve the other boundary from the active sequence. These commands are currently CEP-only.
+
+```bash
+./cli/premiere-bridge.js set-in-point --timecode "00;00;10;00"
+./cli/premiere-bridge.js set-out-point --timecode "00;00;20;00"
+```
+
+Both commands also accept ticks or seconds instead of timecode:
+
+```bash
+./cli/premiere-bridge.js set-in-point --seconds 10
+./cli/premiere-bridge.js set-out-point --ticks 5080320000000
+```
+
+The existing combined command is still available when you want to set both boundaries explicitly:
+
+```bash
+./cli/premiere-bridge.js set-in-out --in "00;00;10;00" --out "00;00;20;00"
 ```
 
 ## Insert Clip (CEP)
