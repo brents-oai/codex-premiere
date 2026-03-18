@@ -30,6 +30,8 @@ Usage:
   premiere-bridge get-playhead [--port N] [--token TOKEN]
   premiere-bridge debug-timecode --timecode 00;02;00;00 [--port N] [--token TOKEN]
   premiere-bridge set-playhead --timecode 00;00;10;00 [--port N] [--token TOKEN]
+  premiere-bridge set-in-point (--timecode 00;00;10;00 | --seconds S | --ticks N) [--port N] [--token TOKEN]
+  premiere-bridge set-out-point (--timecode 00;00;20;00 | --seconds S | --ticks N) [--port N] [--token TOKEN]
   premiere-bridge set-in-out --in 00;00;10;00 --out 00;00;20;00 [--port N] [--token TOKEN]
   premiere-bridge extract-range (--in 00;00;10;00 | --in-ticks N | --in-seconds S) (--out 00;00;20;00 | --out-ticks N | --out-seconds S) [--command-id N] [--port N] [--token TOKEN]
   premiere-bridge ripple-delete-selection [--command-id N] [--port N] [--token TOKEN]
@@ -55,6 +57,7 @@ Notes:
   export-sequences-direct is currently CEP-only and requires --preset plus explicit sequence JSON. Use item outputPath values or --output-dir with per-item filename / --filename-extension for derived filenames.
   insert-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
+  set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -868,6 +871,38 @@ function numericOrNull(value) {
   }
   const n = Number(value);
   return Number.isNaN(n) ? null : n;
+}
+
+function readSinglePointPayload(args, prefix, label) {
+  const payload = {};
+  let count = 0;
+
+  if (args.timecode !== undefined) {
+    payload[`${prefix}Timecode`] = String(args.timecode);
+    count += 1;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error(`--seconds must be a non-negative number for ${label}`);
+    }
+    payload[`${prefix}Seconds`] = seconds;
+    count += 1;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error(`--ticks must be a non-negative number for ${label}`);
+    }
+    payload[`${prefix}Ticks`] = ticks;
+    count += 1;
+  }
+
+  if (count !== 1) {
+    throw new Error(`Provide exactly one ${label} value via --timecode, --seconds, or --ticks`);
+  }
+
+  return payload;
 }
 
 function boolOrNull(value) {
@@ -1971,6 +2006,26 @@ async function main() {
       "setPlayheadTimecode",
       attachDryRun({ timecode: args.timecode }, dryRun)
     );
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-in-point") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("set-in-point is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readSinglePointPayload(args, "in", "set-in-point");
+    const result = await sendCommand(config, "setInPoint", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-out-point") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("set-out-point is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readSinglePointPayload(args, "out", "set-out-point");
+    const result = await sendCommand(config, "setOutPoint", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

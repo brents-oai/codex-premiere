@@ -437,6 +437,122 @@ PremiereBridge._computeInOutTicks = function (payload) {
   };
 };
 
+PremiereBridge._readSequenceBoundaryTicks = function (sequence, qeSeq, prefix) {
+  var cap = prefix === "out" ? "Out" : "In";
+  var getterAsTime = "get" + cap + "PointAsTime";
+  var getter = "get" + cap + "Point";
+  var qeProperty = prefix + "Point";
+  var methods = [];
+  var errors = [];
+  var ticks = null;
+
+  try {
+    if (sequence && sequence[getterAsTime]) {
+      var timeValue = sequence[getterAsTime]();
+      var ticksFromTime = PremiereBridge._timeToTicks(timeValue);
+      if (ticksFromTime !== null && ticksFromTime !== undefined && !isNaN(Number(ticksFromTime))) {
+        ticks = Number(ticksFromTime);
+        methods.push("dom." + getterAsTime);
+      }
+    }
+  } catch (errGetAsTime) {
+    errors.push("dom." + getterAsTime + ": " + String(errGetAsTime));
+  }
+
+  try {
+    if ((ticks === null || ticks === undefined || isNaN(Number(ticks))) && sequence && sequence[getter]) {
+      var rawValue = sequence[getter]();
+      var ticksFromRaw = PremiereBridge._timeToTicks(rawValue);
+      if (ticksFromRaw !== null && ticksFromRaw !== undefined && !isNaN(Number(ticksFromRaw))) {
+        ticks = Number(ticksFromRaw);
+        methods.push("dom." + getter + "(time)");
+      } else {
+        var secondsValue = Number(rawValue);
+        if (!isNaN(secondsValue)) {
+          ticks = Number(PremiereBridge._secondsToTicks(secondsValue));
+          methods.push("dom." + getter + "(seconds)");
+        }
+      }
+    }
+  } catch (errGet) {
+    errors.push("dom." + getter + ": " + String(errGet));
+  }
+
+  try {
+    if ((ticks === null || ticks === undefined || isNaN(Number(ticks))) && qeSeq && qeSeq[qeProperty] !== undefined && qeSeq[qeProperty] !== null) {
+      var qeValue = qeSeq[qeProperty];
+      if (typeof qeValue === "function") {
+        qeValue = qeValue();
+      }
+      var ticksFromQe = PremiereBridge._timeToTicks(qeValue);
+      if (ticksFromQe !== null && ticksFromQe !== undefined && !isNaN(Number(ticksFromQe))) {
+        ticks = Number(ticksFromQe);
+        methods.push("qe." + qeProperty);
+      }
+    }
+  } catch (errQePoint) {
+    errors.push("qe." + qeProperty + ": " + String(errQePoint));
+  }
+
+  if (ticks === null || ticks === undefined || isNaN(Number(ticks))) {
+    return {
+      ok: false,
+      error: "Unable to read current " + prefix + " point",
+      methods: methods,
+      errors: errors,
+      available: {
+        domGetAsTime: !!(sequence && sequence[getterAsTime]),
+        domGet: !!(sequence && sequence[getter]),
+        qePoint: !!(qeSeq && qeSeq[qeProperty] !== undefined && qeSeq[qeProperty] !== null)
+      }
+    };
+  }
+
+  ticks = Math.round(Number(ticks));
+  return {
+    ok: true,
+    ticks: ticks,
+    timecode: PremiereBridge._ticksToTimecode(ticks),
+    methods: methods,
+    errors: errors,
+    available: {
+      domGetAsTime: !!(sequence && sequence[getterAsTime]),
+      domGet: !!(sequence && sequence[getter]),
+      qePoint: !!(qeSeq && qeSeq[qeProperty] !== undefined && qeSeq[qeProperty] !== null)
+    }
+  };
+};
+
+PremiereBridge._readSequenceInOutTicks = function (sequence, qeSeq) {
+  var inResult = PremiereBridge._readSequenceBoundaryTicks(sequence, qeSeq, "in");
+  var outResult = PremiereBridge._readSequenceBoundaryTicks(sequence, qeSeq, "out");
+  if (!inResult.ok || !outResult.ok) {
+    return {
+      ok: false,
+      error: "Failed to read current in/out points",
+      inPoint: inResult,
+      outPoint: outResult
+    };
+  }
+  if (outResult.ticks < inResult.ticks) {
+    return {
+      ok: false,
+      error: "Current out point is before current in point",
+      inPoint: inResult,
+      outPoint: outResult
+    };
+  }
+  return {
+    ok: true,
+    inTicks: inResult.ticks,
+    outTicks: outResult.ticks,
+    inTimecode: inResult.timecode,
+    outTimecode: outResult.timecode,
+    inPoint: inResult,
+    outPoint: outResult
+  };
+};
+
 PremiereBridge._setInOutTicks = function (sequence, qeSeq, inTicks, outTicks) {
   var methods = [];
   var errors = [];
@@ -1424,6 +1540,170 @@ PremiereBridge.setInOutPoints = function (jsonStr) {
     return PremiereBridge._ok({
       inTicks: String(inTicks),
       outTicks: String(outTicks),
+      methods: applied.methods
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.setInPoint = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+    var qeSeq = PremiereBridge._getQeSequence();
+    var current = PremiereBridge._readSequenceInOutTicks(sequence, qeSeq);
+    if (!current.ok) {
+      return PremiereBridge._err(current.error, current);
+    }
+
+    var inTicks = PremiereBridge._ticksFromPayload(payload, "in");
+    if (inTicks === null || inTicks === undefined) {
+      return PremiereBridge._err("Missing or invalid in value", { received: payload });
+    }
+    inTicks = Math.round(Number(inTicks));
+    if (isNaN(inTicks)) {
+      return PremiereBridge._err("Failed to compute in point ticks", { received: payload });
+    }
+    if (current.outTicks < inTicks) {
+      return PremiereBridge._err("In point must be before or equal to the current out point", {
+        inTicks: String(inTicks),
+        currentOutTicks: String(current.outTicks),
+        currentOutTimecode: current.outTimecode
+      });
+    }
+
+    if (payload.dryRun === true) {
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        inTicks: String(inTicks),
+        outTicks: String(current.outTicks),
+        inTimecode: PremiereBridge._ticksToTimecode(inTicks),
+        outTimecode: current.outTimecode,
+        preserved: {
+          outTicks: String(current.outTicks),
+          outTimecode: current.outTimecode
+        },
+        current: current
+      });
+    }
+
+    var applied = PremiereBridge._setInOutTicks(sequence, qeSeq, inTicks, current.outTicks);
+    if (!applied.ok) {
+      return PremiereBridge._err("Failed to set in point", {
+        inApplied: applied.inApplied,
+        outApplied: applied.outApplied,
+        inTicks: String(inTicks),
+        outTicks: String(current.outTicks),
+        inTimecode: PremiereBridge._ticksToTimecode(inTicks),
+        outTimecode: current.outTimecode,
+        methods: applied.methods,
+        errors: applied.errors,
+        available: applied.available,
+        preserved: {
+          outTicks: String(current.outTicks),
+          outTimecode: current.outTimecode
+        },
+        current: current
+      });
+    }
+
+    return PremiereBridge._ok({
+      inTicks: String(inTicks),
+      outTicks: String(current.outTicks),
+      inTimecode: PremiereBridge._ticksToTimecode(inTicks),
+      outTimecode: current.outTimecode,
+      preserved: {
+        outTicks: String(current.outTicks),
+        outTimecode: current.outTimecode
+      },
+      current: current,
+      methods: applied.methods
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.setOutPoint = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+    var qeSeq = PremiereBridge._getQeSequence();
+    var current = PremiereBridge._readSequenceInOutTicks(sequence, qeSeq);
+    if (!current.ok) {
+      return PremiereBridge._err(current.error, current);
+    }
+
+    var outTicks = PremiereBridge._ticksFromPayload(payload, "out");
+    if (outTicks === null || outTicks === undefined) {
+      return PremiereBridge._err("Missing or invalid out value", { received: payload });
+    }
+    outTicks = Math.round(Number(outTicks));
+    if (isNaN(outTicks)) {
+      return PremiereBridge._err("Failed to compute out point ticks", { received: payload });
+    }
+    if (outTicks < current.inTicks) {
+      return PremiereBridge._err("Out point must be after or equal to the current in point", {
+        outTicks: String(outTicks),
+        currentInTicks: String(current.inTicks),
+        currentInTimecode: current.inTimecode
+      });
+    }
+
+    if (payload.dryRun === true) {
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        inTicks: String(current.inTicks),
+        outTicks: String(outTicks),
+        inTimecode: current.inTimecode,
+        outTimecode: PremiereBridge._ticksToTimecode(outTicks),
+        preserved: {
+          inTicks: String(current.inTicks),
+          inTimecode: current.inTimecode
+        },
+        current: current
+      });
+    }
+
+    var applied = PremiereBridge._setInOutTicks(sequence, qeSeq, current.inTicks, outTicks);
+    if (!applied.ok) {
+      return PremiereBridge._err("Failed to set out point", {
+        inApplied: applied.inApplied,
+        outApplied: applied.outApplied,
+        inTicks: String(current.inTicks),
+        outTicks: String(outTicks),
+        inTimecode: current.inTimecode,
+        outTimecode: PremiereBridge._ticksToTimecode(outTicks),
+        methods: applied.methods,
+        errors: applied.errors,
+        available: applied.available,
+        preserved: {
+          inTicks: String(current.inTicks),
+          inTimecode: current.inTimecode
+        },
+        current: current
+      });
+    }
+
+    return PremiereBridge._ok({
+      inTicks: String(current.inTicks),
+      outTicks: String(outTicks),
+      inTimecode: current.inTimecode,
+      outTimecode: PremiereBridge._ticksToTimecode(outTicks),
+      preserved: {
+        inTicks: String(current.inTicks),
+        inTimecode: current.inTimecode
+      },
+      current: current,
       methods: applied.methods
     });
   } catch (err) {
