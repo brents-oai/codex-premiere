@@ -74,6 +74,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js add-markers-file --file markers.json
 ./cli/premiere-bridge.js update-marker --match-name Intro --match-timecode "00;00;01;00" --comment "Tighten open" --timecode "00;00;01;12"
 ./cli/premiere-bridge.js delete-markers --match-name Intro --in-timecode "00;00;01;00" --out-timecode "00;00;05;00"
+./cli/premiere-bridge.js clear-markers --transport cep
 ./cli/premiere-bridge.js toggle-video-track --track V1 --visible false
 ./cli/premiere-bridge.js set-track-state --track A1 --kind audio --mute true
 ```
@@ -141,6 +142,7 @@ Color indices:
 - `add-markers-file`
 - `update-marker` (CEP only; match by name/time and update marker fields deterministically)
 - `delete-markers` (CEP only; delete by exact name/time or by inclusive start-time range)
+- `clear-markers` (CEP only; delete every marker on the active sequence)
 - `toggle-video-track`
 - `set-track-state`
 

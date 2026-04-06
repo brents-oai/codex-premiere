@@ -42,6 +42,7 @@ Usage:
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
   premiere-bridge update-marker [--transport cep|auto] (--match-name NAME | --match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N) [--match-name NAME] [--name NAME] [--comment TEXT] [--color NAME | --color-index N | --color-value N] [--timecode 00;00;12;00 | --frame N | --seconds S | --ticks N] [--duration-seconds S | --duration-ticks N] [--port N] [--token TOKEN]
   premiere-bridge delete-markers [--transport cep|auto] [--match-name NAME] [--match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N | (--in-timecode 00;00;10;00 | --in-frame N | --in-seconds S | --in-ticks N) (--out-timecode 00;00;20;00 | --out-frame N | --out-seconds S | --out-ticks N)] [--all-matches] [--port N] [--token TOKEN]
+  premiere-bridge clear-markers [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge toggle-video-track --track V1 [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
   premiere-bridge set-track-state --track V1|A1 [--kind video|audio] [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
 
@@ -62,6 +63,7 @@ Notes:
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
   delete-markers is currently CEP-only. Range deletion matches marker start times inclusively between the in/out bounds.
+  clear-markers is currently CEP-only and deletes every marker on the active sequence.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -2561,6 +2563,16 @@ async function main() {
     }
     const payload = readDeleteMarkersPayload(args);
     const result = await sendCommand(config, "deleteMarkers", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "clear-markers") {
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("clear-markers is currently supported only on CEP. Use --transport cep.");
+    }
+    const result = await sendCommand(config, "clearMarkers", attachDryRun({}, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

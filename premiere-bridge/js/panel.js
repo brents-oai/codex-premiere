@@ -502,6 +502,7 @@
     "addMarkersFromFile",
     "updateMarker",
     "deleteMarkers",
+    "clearMarkers",
     "setPlayheadTimecode",
     "setInPoint",
     "setOutPoint",
@@ -586,6 +587,15 @@
         };
       }
       return evalExtendScript("deleteMarkers", cleanPayload);
+    }
+    if (command === "clearMarkers") {
+      if (dryRun) {
+        return {
+          ok: true,
+          data: { dryRun: true, skipped: true, command, payload: cleanPayload }
+        };
+      }
+      return evalExtendScript("clearMarkers", cleanPayload);
     }
     if (command === "exportSequenceAudio") {
       const prepared = await prepareAudioExportPayload(cleanPayload);

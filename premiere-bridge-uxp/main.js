@@ -68,6 +68,7 @@ const MUTATING_COMMANDS = new Set([
   "addMarkersFromFile",
   "updateMarker",
   "deleteMarkers",
+  "clearMarkers",
   "setPlayheadTimecode",
   "setInOutPoints",
   "extractRange",
@@ -2276,6 +2277,9 @@ async function handleCommand(command, payload) {
   }
   if (command === "deleteMarkers") {
     return { ok: false, error: "delete-markers is currently supported only on CEP. Use --transport cep." };
+  }
+  if (command === "clearMarkers") {
+    return { ok: false, error: "clear-markers is currently supported only on CEP. Use --transport cep." };
   }
   if (dryRun && MUTATING_COMMANDS.has(command)) {
     return {
