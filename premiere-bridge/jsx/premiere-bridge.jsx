@@ -3538,6 +3538,33 @@ PremiereBridge.saveProject = function (jsonStr) {
   }
 };
 
+PremiereBridge.exportMarkers = function (jsonStr) {
+  try {
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var markerCollection = sequence.markers;
+    var matches = PremiereBridge._collectAllMarkers(markerCollection);
+    var markers = [];
+    var i = 0;
+    for (i = 0; i < matches.length; i++) {
+      markers.push(PremiereBridge._markerSummary(matches[i]));
+    }
+
+    return PremiereBridge._ok({
+      sequence: {
+        name: sequence.name ? String(sequence.name) : null,
+        id: sequence.sequenceID ? String(sequence.sequenceID) : null
+      },
+      markers: markers
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge._exportSequenceWithPreset = function (payload, options) {
   try {
     var cleanPayload = payload || {};

@@ -66,6 +66,7 @@ const MUTATING_COMMANDS = new Set([
   "openSequence",
   "addMarkers",
   "addMarkersFromFile",
+  "exportMarkers",
   "updateMarker",
   "deleteMarkers",
   "clearMarkers",
@@ -2274,6 +2275,9 @@ async function handleCommand(command, payload) {
   }
   if (command === "updateMarker") {
     return { ok: false, error: "update-marker is currently supported only on CEP. Use --transport cep." };
+  }
+  if (command === "exportMarkers") {
+    return { ok: false, error: "export-markers is currently supported only on CEP. Use --transport cep." };
   }
   if (command === "deleteMarkers") {
     return { ok: false, error: "delete-markers is currently supported only on CEP. Use --transport cep." };
