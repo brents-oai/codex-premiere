@@ -1010,6 +1010,61 @@ PremiereBridge._toTime = function (marker, sequence, qeSeq) {
   return null;
 };
 
+PremiereBridge._markerPayloadToTicks = function (marker, sequence, qeSeq) {
+  if (!marker) {
+    return null;
+  }
+
+  if (marker.timeTicks !== undefined && marker.timeTicks !== null) {
+    var tickValue = Number(marker.timeTicks);
+    if (!isNaN(tickValue)) {
+      return Math.round(tickValue);
+    }
+  }
+
+  if (marker.timecode !== undefined && marker.timecode !== null) {
+    var ticksFromTimecode = PremiereBridge._timecodeToTicks(String(marker.timecode));
+    if (ticksFromTimecode !== null && ticksFromTimecode !== undefined && !isNaN(Number(ticksFromTimecode))) {
+      return Math.round(Number(ticksFromTimecode));
+    }
+  }
+
+  function tryFrameKeys(keys) {
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (marker[key] === undefined || marker[key] === null) {
+        continue;
+      }
+      var ticksFromFrame = PremiereBridge._frameToTicks(marker[key], sequence, qeSeq);
+      if (ticksFromFrame !== null && ticksFromFrame !== undefined && !isNaN(Number(ticksFromFrame))) {
+        return Math.round(Number(ticksFromFrame));
+      }
+    }
+    return null;
+  }
+
+  var frameTicks = tryFrameKeys(["frame", "frameNumber", "frameIndex"]);
+  if (frameTicks !== null) {
+    return frameTicks;
+  }
+
+  if (marker.timeSeconds !== undefined && marker.timeSeconds !== null) {
+    var secondsValue = Number(marker.timeSeconds);
+    if (!isNaN(secondsValue)) {
+      return Math.round(PremiereBridge._secondsToTicks(secondsValue));
+    }
+  }
+
+  if (marker.time !== undefined && marker.time !== null) {
+    var timeValue = Number(marker.time);
+    if (!isNaN(timeValue)) {
+      return Math.round(PremiereBridge._secondsToTicks(timeValue));
+    }
+  }
+
+  return null;
+};
+
 PremiereBridge._colorValue = function (colorName) {
   if (!colorName) {
     return null;
@@ -1180,6 +1235,232 @@ PremiereBridge._applyColorIndex = function (markerCollection, marker, colorIndex
   } catch (err2) {
   }
   return false;
+};
+
+PremiereBridge._markerName = function (marker) {
+  if (!marker) {
+    return "";
+  }
+  try {
+    if (marker.name !== undefined && marker.name !== null) {
+      return String(marker.name);
+    }
+  } catch (errName) {
+  }
+  return "";
+};
+
+PremiereBridge._markerComment = function (marker) {
+  if (!marker) {
+    return "";
+  }
+  try {
+    if (marker.comments !== undefined && marker.comments !== null) {
+      return String(marker.comments);
+    }
+  } catch (errComments) {
+  }
+  try {
+    if (marker.comment !== undefined && marker.comment !== null) {
+      return String(marker.comment);
+    }
+  } catch (errComment) {
+  }
+  return "";
+};
+
+PremiereBridge._markerStartTicks = function (marker) {
+  if (!marker) {
+    return null;
+  }
+  try {
+    return PremiereBridge._timeToTicks(marker.start);
+  } catch (errStart) {
+  }
+  return null;
+};
+
+PremiereBridge._markerEndTicks = function (marker, startTicks) {
+  var fallback = startTicks !== null && startTicks !== undefined ? Number(startTicks) : null;
+  if (!marker) {
+    return fallback;
+  }
+  var endTicks = null;
+  try {
+    endTicks = PremiereBridge._timeToTicks(marker.end);
+  } catch (errEnd) {
+  }
+  if (endTicks === null || endTicks === undefined || isNaN(Number(endTicks))) {
+    return fallback;
+  }
+  endTicks = Number(endTicks);
+  if (fallback !== null && !isNaN(fallback) && endTicks < fallback) {
+    return fallback;
+  }
+  return endTicks;
+};
+
+PremiereBridge._markerSummary = function (marker) {
+  var startTicks = PremiereBridge._markerStartTicks(marker);
+  var endTicks = PremiereBridge._markerEndTicks(marker, startTicks);
+  var durationTicks = null;
+  if (startTicks !== null && endTicks !== null) {
+    durationTicks = Math.max(0, Math.round(Number(endTicks) - Number(startTicks)));
+  }
+  return {
+    guid: marker && marker.guid ? String(marker.guid) : null,
+    type: marker && marker.type ? String(marker.type) : null,
+    name: PremiereBridge._markerName(marker),
+    comment: PremiereBridge._markerComment(marker),
+    startTicks: startTicks !== null ? String(Math.round(Number(startTicks))) : null,
+    startTimecode: startTicks !== null ? PremiereBridge._ticksToTimecode(startTicks) : null,
+    endTicks: endTicks !== null ? String(Math.round(Number(endTicks))) : null,
+    durationTicks: durationTicks !== null ? String(durationTicks) : null,
+    durationSeconds: durationTicks !== null ? (durationTicks / PremiereBridge.TICKS_PER_SECOND) : null
+  };
+};
+
+PremiereBridge._setMarkerName = function (marker, name) {
+  var value = String(name);
+  try {
+    marker.name = value;
+  } catch (errName) {
+  }
+  return PremiereBridge._markerName(marker) === value;
+};
+
+PremiereBridge._setMarkerComment = function (marker, comment) {
+  var value = comment === undefined || comment === null ? "" : String(comment);
+  try {
+    if (marker.comments !== undefined) {
+      marker.comments = value;
+    } else if (marker.comment !== undefined) {
+      marker.comment = value;
+    }
+  } catch (errComment) {
+  }
+  return PremiereBridge._markerComment(marker) === value;
+};
+
+PremiereBridge._setMarkerStart = function (marker, timeValue) {
+  var targetTicks = PremiereBridge._timeToTicks(timeValue);
+  if (targetTicks === null || targetTicks === undefined || isNaN(Number(targetTicks))) {
+    return false;
+  }
+  var roundedTicks = Math.round(Number(targetTicks));
+  var secondsValue = roundedTicks / PremiereBridge.TICKS_PER_SECOND;
+
+  try {
+    if (marker.start && marker.start.ticks !== undefined) {
+      marker.start.ticks = String(roundedTicks);
+    }
+  } catch (errTicks) {
+  }
+  var actualStart = PremiereBridge._markerStartTicks(marker);
+  if (actualStart !== null && !isNaN(Number(actualStart)) && Math.round(Number(actualStart)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    if (marker.start && marker.start.seconds !== undefined) {
+      marker.start.seconds = secondsValue;
+    }
+  } catch (errSeconds) {
+  }
+  actualStart = PremiereBridge._markerStartTicks(marker);
+  if (actualStart !== null && !isNaN(Number(actualStart)) && Math.round(Number(actualStart)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    marker.start = timeValue;
+  } catch (errTime) {
+  }
+  actualStart = PremiereBridge._markerStartTicks(marker);
+  if (actualStart !== null && !isNaN(Number(actualStart)) && Math.round(Number(actualStart)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    marker.start = secondsValue;
+  } catch (errAssignSeconds) {
+  }
+  actualStart = PremiereBridge._markerStartTicks(marker);
+  if (actualStart !== null && !isNaN(Number(actualStart)) && Math.round(Number(actualStart)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    marker.start = String(roundedTicks);
+  } catch (errAssignTicks) {
+  }
+  actualStart = PremiereBridge._markerStartTicks(marker);
+  return actualStart !== null && !isNaN(Number(actualStart)) && Math.round(Number(actualStart)) === roundedTicks;
+};
+
+PremiereBridge._setMarkerEndTicks = function (marker, endTicks) {
+  if (!marker || endTicks === null || endTicks === undefined || isNaN(Number(endTicks))) {
+    return false;
+  }
+  var roundedTicks = Math.round(Number(endTicks));
+  var secondsValue = roundedTicks / PremiereBridge.TICKS_PER_SECOND;
+
+  try {
+    marker.end = secondsValue;
+  } catch (errSeconds) {
+  }
+  var actualEnd = PremiereBridge._markerEndTicks(marker, null);
+  if (actualEnd !== null && !isNaN(Number(actualEnd)) && Math.round(Number(actualEnd)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    if (marker.end && marker.end.seconds !== undefined) {
+      marker.end.seconds = secondsValue;
+    }
+  } catch (errEndSeconds) {
+  }
+  actualEnd = PremiereBridge._markerEndTicks(marker, null);
+  if (actualEnd !== null && !isNaN(Number(actualEnd)) && Math.round(Number(actualEnd)) === roundedTicks) {
+    return true;
+  }
+
+  try {
+    if (marker.end && marker.end.ticks !== undefined) {
+      marker.end.ticks = String(roundedTicks);
+    }
+  } catch (errEndTicks) {
+  }
+  actualEnd = PremiereBridge._markerEndTicks(marker, null);
+  return actualEnd !== null && !isNaN(Number(actualEnd)) && Math.round(Number(actualEnd)) === roundedTicks;
+};
+
+PremiereBridge._collectMarkerMatches = function (markerCollection, criteria) {
+  var matches = [];
+  if (!markerCollection) {
+    return matches;
+  }
+
+  try {
+    var current = markerCollection.getFirstMarker();
+    while (current) {
+      var ok = true;
+      if (criteria.name !== null && criteria.name !== undefined) {
+        ok = PremiereBridge._markerName(current) === criteria.name;
+      }
+      if (ok && criteria.timeTicks !== null && criteria.timeTicks !== undefined) {
+        var currentTicks = PremiereBridge._markerStartTicks(current);
+        ok = currentTicks !== null && Math.round(Number(currentTicks)) === Math.round(Number(criteria.timeTicks));
+      }
+      if (ok) {
+        matches.push(current);
+      }
+      current = markerCollection.getNextMarker(current);
+    }
+  } catch (err) {
+  }
+
+  return matches;
 };
 
 PremiereBridge.getSequenceInfo = function () {
@@ -2691,6 +2972,223 @@ PremiereBridge.addMarkersFromJSON = function (jsonStr) {
     }
 
     return PremiereBridge._ok({ added: added, errors: errors });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.updateMarker = function (jsonStr) {
+  try {
+    var data = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var criteria = {
+      name: null,
+      timeTicks: null
+    };
+    if (data.matchName !== undefined && data.matchName !== null) {
+      criteria.name = String(data.matchName);
+      if (!criteria.name.replace(/^\s+|\s+$/g, "")) {
+        return PremiereBridge._err("matchName must be a non-empty string");
+      }
+    }
+
+    var hasTimeSelector =
+      data.matchTimecode !== undefined ||
+      data.matchFrame !== undefined ||
+      data.matchSeconds !== undefined ||
+      data.matchTicks !== undefined;
+    if (hasTimeSelector) {
+      criteria.timeTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: data.matchTimecode,
+        frame: data.matchFrame,
+        timeSeconds: data.matchSeconds,
+        timeTicks: data.matchTicks
+      }, sequence, PremiereBridge._getQeSequence());
+      if (criteria.timeTicks === null || isNaN(Number(criteria.timeTicks))) {
+        return PremiereBridge._err("Invalid match time");
+      }
+      criteria.timeTicks = Math.round(Number(criteria.timeTicks));
+    }
+
+    if (criteria.name === null && criteria.timeTicks === null) {
+      return PremiereBridge._err("Provide matchName or one of matchTimecode/matchFrame/matchSeconds/matchTicks");
+    }
+
+    var hasPositionUpdate =
+      data.timecode !== undefined ||
+      data.frame !== undefined ||
+      data.timeSeconds !== undefined ||
+      data.timeTicks !== undefined;
+    var hasDurationUpdate = data.durationSeconds !== undefined || data.durationTicks !== undefined;
+    var hasColorUpdate =
+      data.color !== undefined ||
+      data.colorIndex !== undefined ||
+      data.colorValue !== undefined;
+    var hasNameUpdate = data.name !== undefined;
+    var hasCommentUpdate = data.comment !== undefined;
+    if (!hasPositionUpdate && !hasDurationUpdate && !hasColorUpdate && !hasNameUpdate && !hasCommentUpdate) {
+      return PremiereBridge._err("No marker updates provided");
+    }
+
+    if (hasNameUpdate) {
+      var nextName = String(data.name);
+      if (!nextName.replace(/^\s+|\s+$/g, "")) {
+        return PremiereBridge._err("name must be a non-empty string");
+      }
+    }
+
+    var markerCollection = sequence.markers;
+    var matches = PremiereBridge._collectMarkerMatches(markerCollection, criteria);
+    if (!matches.length) {
+      return PremiereBridge._err("No marker matched the requested selector", {
+        criteria: {
+          name: criteria.name,
+          timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+          timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null
+        }
+      });
+    }
+    if (matches.length > 1) {
+      var ambiguous = [];
+      var limit = Math.min(matches.length, 5);
+      var i = 0;
+      for (i = 0; i < limit; i++) {
+        ambiguous.push(PremiereBridge._markerSummary(matches[i]));
+      }
+      return PremiereBridge._err("Multiple markers matched the requested selector. Narrow the match with both name and time.", {
+        criteria: {
+          name: criteria.name,
+          timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+          timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null
+        },
+        matchCount: matches.length,
+        matches: ambiguous
+      });
+    }
+
+    var marker = matches[0];
+    var before = PremiereBridge._markerSummary(marker);
+    var currentStartTicks = before.startTicks !== null ? Number(before.startTicks) : null;
+    var currentDurationTicks = before.durationTicks !== null ? Number(before.durationTicks) : 0;
+    if (currentStartTicks === null || isNaN(currentStartTicks)) {
+      return PremiereBridge._err("Unable to read marker start time", { before: before });
+    }
+    if (isNaN(currentDurationTicks) || currentDurationTicks < 0) {
+      currentDurationTicks = 0;
+    }
+
+    var finalStartTicks = currentStartTicks;
+    var finalStartTime = null;
+    if (hasPositionUpdate) {
+      finalStartTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: data.timecode,
+        frame: data.frame,
+        timeSeconds: data.timeSeconds,
+        timeTicks: data.timeTicks
+      }, sequence, PremiereBridge._getQeSequence());
+      if (finalStartTicks === null || isNaN(Number(finalStartTicks))) {
+        return PremiereBridge._err("Invalid target time for marker update", { before: before });
+      }
+      finalStartTicks = Math.round(Number(finalStartTicks));
+      finalStartTime = new Time();
+      finalStartTime.ticks = String(finalStartTicks);
+      finalStartTime.seconds = finalStartTicks / PremiereBridge.TICKS_PER_SECOND;
+    }
+
+    var finalDurationTicks = currentDurationTicks;
+    if (data.durationSeconds !== undefined) {
+      finalDurationTicks = Math.max(0, Math.round(Number(data.durationSeconds) * PremiereBridge.TICKS_PER_SECOND));
+    } else if (data.durationTicks !== undefined) {
+      finalDurationTicks = Math.max(0, Math.round(Number(data.durationTicks)));
+    }
+
+    if (hasPositionUpdate) {
+      if (!finalStartTime) {
+        finalStartTime = new Time();
+        finalStartTime.ticks = String(finalStartTicks);
+        finalStartTime.seconds = finalStartTicks / PremiereBridge.TICKS_PER_SECOND;
+      }
+      if (!PremiereBridge._setMarkerStart(marker, finalStartTime)) {
+        return PremiereBridge._err("Failed to update marker start time", {
+          before: before,
+          requestedStartTicks: String(finalStartTicks),
+          requestedStartTimecode: PremiereBridge._ticksToTimecode(finalStartTicks)
+        });
+      }
+    }
+
+    if (hasPositionUpdate || hasDurationUpdate || currentDurationTicks > 0) {
+      var finalEndTicks = finalStartTicks + finalDurationTicks;
+      if (finalEndTicks > finalStartTicks || hasDurationUpdate || currentDurationTicks > 0) {
+        if (!PremiereBridge._setMarkerEndTicks(marker, finalEndTicks)) {
+          return PremiereBridge._err("Failed to update marker duration/end time", {
+            before: before,
+            requestedEndTicks: String(finalEndTicks)
+          });
+        }
+      }
+    }
+
+    if (hasNameUpdate && !PremiereBridge._setMarkerName(marker, data.name)) {
+      return PremiereBridge._err("Failed to update marker name", { before: before });
+    }
+
+    if (hasCommentUpdate && !PremiereBridge._setMarkerComment(marker, data.comment)) {
+      return PremiereBridge._err("Failed to update marker comment", { before: before });
+    }
+
+    if (hasColorUpdate) {
+      var resolvedColor = PremiereBridge._resolveColorIndex(data);
+      var colorSet = false;
+      if (resolvedColor.index !== null && !isNaN(resolvedColor.index)) {
+        colorSet = PremiereBridge._applyColorIndex(markerCollection, marker, resolvedColor.index);
+      }
+      if (!colorSet && data.color !== undefined && typeof data.color === "string" && marker.setColorByName) {
+        try {
+          marker.setColorByName(String(data.color));
+          colorSet = true;
+        } catch (errColor) {
+        }
+      }
+      if (!colorSet) {
+        return PremiereBridge._err("Failed to update marker color", { before: before });
+      }
+    }
+
+    var after = PremiereBridge._markerSummary(marker);
+    if (hasPositionUpdate) {
+      if (after.startTicks === null || Number(after.startTicks) !== finalStartTicks) {
+        return PremiereBridge._err("Marker update drifted from the requested frame", {
+          before: before,
+          after: after,
+          requestedStartTicks: String(finalStartTicks),
+          requestedStartTimecode: PremiereBridge._ticksToTimecode(finalStartTicks)
+        });
+      }
+    }
+    if (hasDurationUpdate) {
+      if (after.durationTicks === null || Number(after.durationTicks) !== finalDurationTicks) {
+        return PremiereBridge._err("Marker duration did not match the requested value", {
+          before: before,
+          after: after,
+          requestedDurationTicks: String(finalDurationTicks)
+        });
+      }
+    }
+
+    return PremiereBridge._ok({
+      criteria: {
+        name: criteria.name,
+        timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+        timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null
+      },
+      before: before,
+      after: after
+    });
   } catch (err) {
     return PremiereBridge._err(String(err));
   }

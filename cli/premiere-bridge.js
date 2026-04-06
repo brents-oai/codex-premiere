@@ -40,6 +40,7 @@ Usage:
   premiere-bridge add-markers --file markers.json [--port N] [--token TOKEN]
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
+  premiere-bridge update-marker [--transport cep|auto] (--match-name NAME | --match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N) [--match-name NAME] [--name NAME] [--comment TEXT] [--color NAME | --color-index N | --color-value N] [--timecode 00;00;12;00 | --frame N | --seconds S | --ticks N] [--duration-seconds S | --duration-ticks N] [--port N] [--token TOKEN]
   premiere-bridge toggle-video-track --track V1 [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
   premiere-bridge set-track-state --track V1|A1 [--kind video|audio] [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
 
@@ -58,6 +59,7 @@ Notes:
   insert-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
+  update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -900,6 +902,176 @@ function readSinglePointPayload(args, prefix, label) {
 
   if (count !== 1) {
     throw new Error(`Provide exactly one ${label} value via --timecode, --seconds, or --ticks`);
+  }
+
+  return payload;
+}
+
+function readMarkerMatchPayload(args) {
+  const payload = {};
+  let timeSelectorCount = 0;
+  let hasSelector = false;
+
+  if (args["match-name"] !== undefined) {
+    const name = String(args["match-name"]);
+    if (!name.trim()) {
+      throw new Error("--match-name must be a non-empty string");
+    }
+    payload.matchName = name;
+    hasSelector = true;
+  }
+
+  if (args["match-timecode"] !== undefined) {
+    payload.matchTimecode = String(args["match-timecode"]);
+    timeSelectorCount += 1;
+    hasSelector = true;
+  }
+  if (args["match-frame"] !== undefined) {
+    const frame = Number(args["match-frame"]);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--match-frame must be a non-negative number");
+    }
+    payload.matchFrame = frame;
+    timeSelectorCount += 1;
+    hasSelector = true;
+  }
+  if (args["match-seconds"] !== undefined) {
+    const seconds = Number(args["match-seconds"]);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--match-seconds must be a non-negative number");
+    }
+    payload.matchSeconds = seconds;
+    timeSelectorCount += 1;
+    hasSelector = true;
+  }
+  if (args["match-ticks"] !== undefined) {
+    const ticks = Number(args["match-ticks"]);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--match-ticks must be a non-negative number");
+    }
+    payload.matchTicks = ticks;
+    timeSelectorCount += 1;
+    hasSelector = true;
+  }
+
+  if (timeSelectorCount > 1) {
+    throw new Error("Provide at most one marker time selector via --match-timecode, --match-frame, --match-seconds, or --match-ticks");
+  }
+  if (!hasSelector) {
+    throw new Error("Provide at least one marker selector via --match-name, --match-timecode, --match-frame, --match-seconds, or --match-ticks");
+  }
+
+  return payload;
+}
+
+function readMarkerUpdatePayload(args) {
+  const payload = {};
+  let hasUpdate = false;
+  let timeUpdateCount = 0;
+  let durationUpdateCount = 0;
+  let colorUpdateCount = 0;
+
+  if (args.name !== undefined) {
+    const name = String(args.name);
+    if (!name.trim()) {
+      throw new Error("--name must be a non-empty string");
+    }
+    payload.name = name;
+    hasUpdate = true;
+  }
+
+  if (args.comment !== undefined) {
+    payload.comment = String(args.comment);
+    hasUpdate = true;
+  }
+
+  if (args.color !== undefined) {
+    payload.color = String(args.color);
+    colorUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args["color-index"] !== undefined) {
+    const colorIndex = Number(args["color-index"]);
+    if (!Number.isFinite(colorIndex) || colorIndex < 0 || colorIndex > 7) {
+      throw new Error("--color-index must be a number from 0 to 7");
+    }
+    payload.colorIndex = colorIndex;
+    colorUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args["color-value"] !== undefined) {
+    const colorValue = Number(args["color-value"]);
+    if (!Number.isFinite(colorValue) || colorValue < 0) {
+      throw new Error("--color-value must be a non-negative number");
+    }
+    payload.colorValue = colorValue;
+    colorUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (colorUpdateCount > 1) {
+    throw new Error("Provide at most one color update via --color, --color-index, or --color-value");
+  }
+
+  if (args.timecode !== undefined) {
+    payload.timecode = String(args.timecode);
+    timeUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args.frame !== undefined) {
+    const frame = Number(args.frame);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--frame must be a non-negative number");
+    }
+    payload.frame = frame;
+    timeUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--seconds must be a non-negative number");
+    }
+    payload.timeSeconds = seconds;
+    timeUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--ticks must be a non-negative number");
+    }
+    payload.timeTicks = ticks;
+    timeUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (timeUpdateCount > 1) {
+    throw new Error("Provide at most one marker move target via --timecode, --frame, --seconds, or --ticks");
+  }
+
+  if (args["duration-seconds"] !== undefined) {
+    const durationSeconds = Number(args["duration-seconds"]);
+    if (!Number.isFinite(durationSeconds) || durationSeconds < 0) {
+      throw new Error("--duration-seconds must be a non-negative number");
+    }
+    payload.durationSeconds = durationSeconds;
+    durationUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (args["duration-ticks"] !== undefined) {
+    const durationTicks = Number(args["duration-ticks"]);
+    if (!Number.isFinite(durationTicks) || durationTicks < 0) {
+      throw new Error("--duration-ticks must be a non-negative number");
+    }
+    payload.durationTicks = durationTicks;
+    durationUpdateCount += 1;
+    hasUpdate = true;
+  }
+  if (durationUpdateCount > 1) {
+    throw new Error("Provide at most one duration update via --duration-seconds or --duration-ticks");
+  }
+
+  if (!hasUpdate) {
+    throw new Error("Provide at least one update field such as --name, --comment, --color, --timecode, or --duration-seconds");
   }
 
   return payload;
@@ -2265,6 +2437,17 @@ async function main() {
       "addMarkersFromFile",
       attachDryRun({ filePath: args.file }, dryRun)
     );
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "update-marker") {
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("update-marker is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = Object.assign({}, readMarkerMatchPayload(args), readMarkerUpdatePayload(args));
+    const result = await sendCommand(config, "updateMarker", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

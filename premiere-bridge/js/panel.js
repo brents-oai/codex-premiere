@@ -500,6 +500,7 @@
     "overwriteClip",
     "addMarkers",
     "addMarkersFromFile",
+    "updateMarker",
     "setPlayheadTimecode",
     "setInPoint",
     "setOutPoint",
@@ -566,6 +567,15 @@
       } catch (err) {
         return { ok: false, error: `Failed to read marker file: ${err.message}` };
       }
+    }
+    if (command === "updateMarker") {
+      if (dryRun) {
+        return {
+          ok: true,
+          data: { dryRun: true, skipped: true, command, payload: cleanPayload }
+        };
+      }
+      return evalExtendScript("updateMarker", cleanPayload);
     }
     if (command === "exportSequenceAudio") {
       const prepared = await prepareAudioExportPayload(cleanPayload);
