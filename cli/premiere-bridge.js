@@ -40,6 +40,7 @@ Usage:
   premiere-bridge add-markers --file markers.json [--port N] [--token TOKEN]
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
+  premiere-bridge export-markers [--transport cep|auto] (--output /abs/path.(json|csv) | --output-dir /abs/dir --filename name.(json|csv)) [--format json|csv] [--port N] [--token TOKEN]
   premiere-bridge update-marker [--transport cep|auto] (--match-name NAME | --match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N) [--match-name NAME] [--name NAME] [--comment TEXT] [--color NAME | --color-index N | --color-value N] [--timecode 00;00;12;00 | --frame N | --seconds S | --ticks N] [--duration-seconds S | --duration-ticks N] [--port N] [--token TOKEN]
   premiere-bridge delete-markers [--transport cep|auto] [--match-name NAME] [--match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N | (--in-timecode 00;00;10;00 | --in-frame N | --in-seconds S | --in-ticks N) (--out-timecode 00;00;20;00 | --out-frame N | --out-seconds S | --out-ticks N)] [--all-matches] [--port N] [--token TOKEN]
   premiere-bridge clear-markers [--transport cep|auto] [--port N] [--token TOKEN]
@@ -58,6 +59,7 @@ Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
   export-sequence-direct is currently CEP-only and requires --preset plus either --output or --output-dir with --filename.
   export-sequences-direct is currently CEP-only and requires --preset plus explicit sequence JSON. Use item outputPath values or --output-dir with per-item filename / --filename-extension for derived filenames.
+  export-markers is currently CEP-only and requires an explicit output path or output-dir/filename. Format may be inferred from .json/.csv or set via --format.
   insert-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
@@ -551,12 +553,90 @@ function normalizeFilenameExtension(value) {
   return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
 }
 
+function markerExportFormatFromPath(outputPath) {
+  if (!outputPath) {
+    return null;
+  }
+  const ext = path.extname(String(outputPath)).toLowerCase();
+  if (ext === ".json") {
+    return "json";
+  }
+  if (ext === ".csv") {
+    return "csv";
+  }
+  return null;
+}
+
+function normalizeMarkerExportFormat(value, outputPath) {
+  const fromPath = markerExportFormatFromPath(outputPath);
+  if (value === undefined || value === null) {
+    if (fromPath) {
+      return fromPath;
+    }
+    throw new Error("Provide --format json|csv or use an output filename ending in .json or .csv");
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized !== "json" && normalized !== "csv") {
+    throw new Error("--format must be json or csv");
+  }
+  if (fromPath && fromPath !== normalized) {
+    throw new Error(`Output filename extension does not match --format ${normalized}`);
+  }
+  return normalized;
+}
+
 function normalizeLeafFilename(value, optionName) {
   const trimmed = value === undefined || value === null ? "" : String(value).trim();
   if (!trimmed || trimmed === "." || trimmed === ".." || path.basename(trimmed) !== trimmed) {
     throw new Error(`${optionName} must be a leaf filename such as export.wav`);
   }
   return trimmed;
+}
+
+function readMarkerExportPayload(args) {
+  const hasOutput = args.output !== undefined;
+  const hasOutputDir = args["output-dir"] !== undefined || args.filename !== undefined;
+
+  if (hasOutput && hasOutputDir) {
+    throw new Error("export-markers accepts either --output /abs/path.ext or --output-dir /abs/dir with --filename name.ext, not both");
+  }
+  if (!hasOutput && !(args["output-dir"] !== undefined && args.filename !== undefined)) {
+    throw new Error("export-markers requires either --output /abs/path.ext or both --output-dir /abs/dir and --filename name.ext");
+  }
+
+  let outputPath;
+  let outputDirectory = null;
+  let outputFilename = null;
+  let outputPathSource;
+  let outputDir = null;
+  let filename = null;
+
+  if (hasOutput) {
+    outputPath = path.resolve(String(args.output));
+    const described = describeOutputPath(outputPath);
+    outputDirectory = described.outputDirectory;
+    outputFilename = described.outputFilename;
+    outputPathSource = "explicit-output-path";
+  } else {
+    outputDirectory = path.resolve(String(args["output-dir"]));
+    outputFilename = normalizeLeafFilename(args.filename, "--filename");
+    outputPath = path.join(outputDirectory, outputFilename);
+    outputPathSource = "output-dir-and-filename";
+    outputDir = outputDirectory;
+    filename = outputFilename;
+  }
+
+  const format = normalizeMarkerExportFormat(args.format, outputPath);
+  return {
+    outputPath,
+    outputDir,
+    filename,
+    outputDirectory,
+    outputFilename,
+    outputPathSource,
+    format
+  };
 }
 
 function slugifyFilenameSegment(value) {
@@ -2241,6 +2321,17 @@ async function main() {
   if (command === "add-markers") {
     const markers = readMarkers(args);
     const result = await sendCommand(config, "addMarkers", attachDryRun({ markers }, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "export-markers") {
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("export-markers is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readMarkerExportPayload(args);
+    const result = await sendCommand(config, "exportMarkers", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

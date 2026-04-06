@@ -72,6 +72,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js razor-cut --timecode "00;00;10;00"
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
+./cli/premiere-bridge.js export-markers --transport cep --output /ABS/PATH/markers.json
 ./cli/premiere-bridge.js update-marker --match-name Intro --match-timecode "00;00;01;00" --comment "Tighten open" --timecode "00;00;01;12"
 ./cli/premiere-bridge.js delete-markers --match-name Intro --in-timecode "00;00;01;00" --out-timecode "00;00;05;00"
 ./cli/premiere-bridge.js clear-markers --transport cep
@@ -98,6 +99,11 @@ Supported color fields:
 
 Color indices:
 0 Green, 1 Red, 2 Purple, 3 Orange, 4 Yellow, 5 White, 6 Blue, 7 Cyan.
+
+`export-markers` output flags:
+- Write to either `--output /abs/path.(json|csv)` or `--output-dir /abs/dir --filename name.(json|csv)`.
+- Use `--format json|csv` when you want to force the export type; otherwise the bridge infers it from the filename extension.
+- The response reports `outputPath`, `outputDirectory`, `outputFilename`, `outputPathSource`, `format`, and verified file size.
 
 `update-marker` selection/update flags:
 - Match with `--match-name` and optionally one of `--match-timecode`, `--match-frame`, `--match-seconds`, or `--match-ticks`.
@@ -140,6 +146,7 @@ Color indices:
 - `razor-cut`
 - `add-markers`
 - `add-markers-file`
+- `export-markers` (CEP only; write sequence markers to JSON or CSV)
 - `update-marker` (CEP only; match by name/time and update marker fields deterministically)
 - `delete-markers` (CEP only; delete by exact name/time or by inclusive start-time range)
 - `clear-markers` (CEP only; delete every marker on the active sequence)

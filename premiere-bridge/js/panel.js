@@ -462,6 +462,123 @@
     };
   }
 
+  function markerExportFormatFromPath(outputPath) {
+    if (!outputPath) {
+      return null;
+    }
+    const ext = path.extname(String(outputPath)).toLowerCase();
+    if (ext === ".json") {
+      return "json";
+    }
+    if (ext === ".csv") {
+      return "csv";
+    }
+    return null;
+  }
+
+  function normalizeMarkerExportFormat(value, outputPath) {
+    const fromPath = markerExportFormatFromPath(outputPath);
+    if (value === undefined || value === null) {
+      return fromPath;
+    }
+    const normalized = String(value).trim().toLowerCase();
+    if (normalized !== "json" && normalized !== "csv") {
+      return null;
+    }
+    if (fromPath && fromPath !== normalized) {
+      return "__mismatch__";
+    }
+    return normalized;
+  }
+
+  function prepareMarkerExportPayload(payload) {
+    const clean = payload && typeof payload === "object" ? payload : {};
+    const hasOutputPath = !!clean.outputPath;
+    const hasOutputDir = !!clean.outputDir;
+    const hasFilename = !!clean.filename;
+
+    if (hasOutputPath && (hasOutputDir || hasFilename)) {
+      return {
+        ok: false,
+        error: "Provide either --output /abs/path.ext or --output-dir /abs/dir with --filename name.ext, not both."
+      };
+    }
+    if (!hasOutputPath && (!hasOutputDir || !hasFilename)) {
+      return {
+        ok: false,
+        error: "Missing output target. Provide --output /abs/path.ext or both --output-dir /abs/dir and --filename name.ext."
+      };
+    }
+
+    let outputPathSource = "explicit-output-path";
+    let outputPath = null;
+    if (hasOutputPath) {
+      outputPath = path.resolve(String(clean.outputPath));
+    } else {
+      const filename = String(clean.filename).trim();
+      if (!filename || filename === "." || filename === ".." || path.basename(filename) !== filename) {
+        return {
+          ok: false,
+          error: "Invalid filename. Provide a leaf filename such as markers.json."
+        };
+      }
+      outputPath = path.join(path.resolve(String(clean.outputDir)), filename);
+      outputPathSource = "output-dir-and-filename";
+    }
+
+    const format = normalizeMarkerExportFormat(clean.format, outputPath);
+    if (format === "__mismatch__") {
+      return { ok: false, error: "Output filename extension does not match the requested export format." };
+    }
+    if (!format) {
+      return { ok: false, error: "Provide --format json|csv or use an output filename ending in .json or .csv." };
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    } catch (errDir) {
+      return { ok: false, error: `Failed to create output directory: ${errDir.message}` };
+    }
+
+    return {
+      ok: true,
+      payload: {
+        outputPath: path.resolve(String(outputPath)),
+        format,
+        outputPathSource
+      }
+    };
+  }
+
+  function csvEscape(value) {
+    const text = value === undefined || value === null ? "" : String(value);
+    if (!/[",\n\r]/.test(text)) {
+      return text;
+    }
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function markersToCsv(markers) {
+    const rows = Array.isArray(markers) ? markers : [];
+    const headers = [
+      "guid",
+      "type",
+      "name",
+      "comment",
+      "startTicks",
+      "startTimecode",
+      "endTicks",
+      "durationTicks",
+      "durationSeconds"
+    ];
+    const lines = [headers.join(",")];
+    for (const marker of rows) {
+      const fields = headers.map((key) => csvEscape(marker && marker[key] !== undefined ? marker[key] : ""));
+      lines.push(fields.join(","));
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
   function buildScript(fn, payload) {
     const json = JSON.stringify(payload || {});
     const escaped = JSON.stringify(json);
@@ -494,6 +611,7 @@
     "saveProject",
     "exportSequenceDirect",
     "exportSequenceAudio",
+    "exportMarkers",
     "duplicateSequence",
     "openSequence",
     "insertClip",
@@ -569,6 +687,100 @@
       } catch (err) {
         return { ok: false, error: `Failed to read marker file: ${err.message}` };
       }
+    }
+    if (command === "exportMarkers") {
+      const prepared = prepareMarkerExportPayload(cleanPayload);
+      if (!prepared.ok) {
+        return { ok: false, error: prepared.error, data: prepared.data || null };
+      }
+      if (dryRun) {
+        return {
+          ok: true,
+          data: {
+            dryRun: true,
+            skipped: true,
+            transport: "cep",
+            outputPath: prepared.payload.outputPath,
+            outputDirectory: path.dirname(prepared.payload.outputPath),
+            outputFilename: path.basename(prepared.payload.outputPath),
+            outputPathSource: prepared.payload.outputPathSource,
+            format: prepared.payload.format
+          }
+        };
+      }
+
+      const exportResult = await evalExtendScript("exportMarkers", {});
+      if (!exportResult || !exportResult.ok) {
+        return exportResult || { ok: false, error: "Unknown marker export failure" };
+      }
+
+      const exportData = exportResult.data && typeof exportResult.data === "object" ? exportResult.data : {};
+      const markers = Array.isArray(exportData.markers) ? exportData.markers : [];
+      const format = prepared.payload.format;
+      const content = format === "csv"
+        ? markersToCsv(markers)
+        : JSON.stringify({
+            sequence: exportData.sequence || null,
+            markers
+          }, null, 2);
+
+      try {
+        fs.writeFileSync(prepared.payload.outputPath, content, "utf8");
+      } catch (errWrite) {
+        return {
+          ok: false,
+          error: `Failed to write marker export file: ${errWrite.message}`,
+          data: {
+            outputPath: prepared.payload.outputPath,
+            format
+          }
+        };
+      }
+
+      const file = verifyExportedFile(
+        {
+          outputPath: prepared.payload.outputPath,
+          outputPathSource: prepared.payload.outputPathSource,
+          sequence: exportData.sequence || null
+        },
+        {
+          outputPath: prepared.payload.outputPath,
+          outputPathSource: prepared.payload.outputPathSource,
+          sequenceName: exportData.sequence && exportData.sequence.name ? exportData.sequence.name : null
+        }
+      );
+      if (!file.exists || file.bytes <= 0) {
+        return {
+          ok: false,
+          error: "Marker export finished but output file is missing or empty.",
+          data: {
+            transport: "cep",
+            outputPath: prepared.payload.outputPath,
+            outputDirectory: path.dirname(prepared.payload.outputPath),
+            outputFilename: path.basename(prepared.payload.outputPath),
+            outputPathSource: prepared.payload.outputPathSource,
+            format
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        data: {
+          transport: "cep",
+          sequence: exportData.sequence || null,
+          format,
+          markersExported: markers.length,
+          outputPath: file.outputPath,
+          outputDirectory: file.outputDirectory,
+          outputFilename: file.outputFilename,
+          outputPathSource: file.outputPathSource,
+          file: {
+            exists: true,
+            bytes: file.bytes
+          }
+        }
+      };
     }
     if (command === "updateMarker") {
       if (dryRun) {
