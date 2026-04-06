@@ -72,6 +72,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js razor-cut --timecode "00;00;10;00"
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
+./cli/premiere-bridge.js update-marker --match-name Intro --match-timecode "00;00;01;00" --comment "Tighten open" --timecode "00;00;01;12"
 ./cli/premiere-bridge.js toggle-video-track --track V1 --visible false
 ./cli/premiere-bridge.js set-track-state --track A1 --kind audio --mute true
 ```
@@ -95,6 +96,11 @@ Supported color fields:
 
 Color indices:
 0 Green, 1 Red, 2 Purple, 3 Orange, 4 Yellow, 5 White, 6 Blue, 7 Cyan.
+
+`update-marker` selection/update flags:
+- Match with `--match-name` and optionally one of `--match-timecode`, `--match-frame`, `--match-seconds`, or `--match-ticks`.
+- Update with any mix of `--name`, `--comment`, `--color` / `--color-index` / `--color-value`, one target position flag (`--timecode`, `--frame`, `--seconds`, or `--ticks`), and optional `--duration-seconds` / `--duration-ticks`.
+- Prefer `--match-timecode` or `--match-frame` when exact frame placement matters.
 
 ## Commands
 
@@ -126,6 +132,7 @@ Color indices:
 - `razor-cut`
 - `add-markers`
 - `add-markers-file`
+- `update-marker` (CEP only; match by name/time and update marker fields deterministically)
 - `toggle-video-track`
 - `set-track-state`
 

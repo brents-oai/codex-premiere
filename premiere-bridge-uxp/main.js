@@ -66,6 +66,7 @@ const MUTATING_COMMANDS = new Set([
   "openSequence",
   "addMarkers",
   "addMarkersFromFile",
+  "updateMarker",
   "setPlayheadTimecode",
   "setInOutPoints",
   "extractRange",
@@ -2268,6 +2269,9 @@ async function handleCommand(command, payload) {
   const { dryRun, cleanPayload } = splitDryRunPayload(payload);
   if (command === "ping") {
     return { ok: true, data: { status: "ok", transport: "uxp" } };
+  }
+  if (command === "updateMarker") {
+    return { ok: false, error: "update-marker is currently supported only on CEP. Use --transport cep." };
   }
   if (dryRun && MUTATING_COMMANDS.has(command)) {
     return {
