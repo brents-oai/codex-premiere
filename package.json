@@ -1,0 +1,23 @@
+{
+  "name": "codex-premiere",
+  "version": "1.0.0",
+  "description": "Local IPC bridge for Adobe Premiere Pro on macOS. Provides both a UXP panel (preferred) and a CEP panel (legacy) plus a Node CLI to send commands.",
+  "main": "index.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brents-oai/codex-premiere.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/brents-oai/codex-premiere/issues"
+  },
+  "homepage": "https://github.com/brents-oai/codex-premiere#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.5.0"
+  }
+}
