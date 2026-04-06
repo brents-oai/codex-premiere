@@ -1515,6 +1515,24 @@ PremiereBridge._deleteMarkerReference = function (markerCollection, marker) {
   return false;
 };
 
+PremiereBridge._collectAllMarkers = function (markerCollection) {
+  var matches = [];
+  if (!markerCollection) {
+    return matches;
+  }
+
+  try {
+    var current = markerCollection.getFirstMarker();
+    while (current) {
+      matches.push(current);
+      current = markerCollection.getNextMarker(current);
+    }
+  } catch (err) {
+  }
+
+  return matches;
+};
+
 PremiereBridge.getSequenceInfo = function () {
   try {
     var info = {};
@@ -3429,6 +3447,70 @@ PremiereBridge.deleteMarkers = function (jsonStr) {
         outTimecode: criteria.outTicks !== null ? PremiereBridge._ticksToTimecode(criteria.outTicks) : null,
         allMatches: deleteAllMatches
       },
+      deletedCount: deleted.length,
+      deleted: deleted
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.clearMarkers = function (jsonStr) {
+  try {
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var markerCollection = sequence.markers;
+    var matches = PremiereBridge._collectAllMarkers(markerCollection);
+    var before = [];
+    var i = 0;
+    for (i = 0; i < matches.length; i++) {
+      before.push(PremiereBridge._markerSummary(matches[i]));
+    }
+
+    if (!matches.length) {
+      return PremiereBridge._ok({
+        deletedCount: 0,
+        deleted: []
+      });
+    }
+
+    var deleted = [];
+    var deleteErrors = [];
+    for (i = matches.length - 1; i >= 0; i--) {
+      var marker = matches[i];
+      var summary = PremiereBridge._markerSummary(marker);
+      if (PremiereBridge._deleteMarkerReference(markerCollection, marker)) {
+        deleted.unshift(summary);
+      } else {
+        deleteErrors.push({
+          index: i,
+          marker: summary,
+          error: "Failed to delete marker"
+        });
+      }
+    }
+
+    var remainingMatches = PremiereBridge._collectAllMarkers(markerCollection);
+    if (deleteErrors.length || remainingMatches.length) {
+      var remaining = [];
+      var r = 0;
+      for (r = 0; r < Math.min(remainingMatches.length, 5); r++) {
+        remaining.push(PremiereBridge._markerSummary(remainingMatches[r]));
+      }
+      return PremiereBridge._err("Clear markers did not complete cleanly", {
+        beforeCount: before.length,
+        deletedCount: deleted.length,
+        deleted: deleted,
+        remainingCount: remainingMatches.length,
+        remaining: remaining,
+        errors: deleteErrors
+      });
+    }
+
+    return PremiereBridge._ok({
       deletedCount: deleted.length,
       deleted: deleted
     });
