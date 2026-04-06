@@ -41,6 +41,7 @@ Usage:
   premiere-bridge add-markers --markers '[{"timeSeconds":1.23,"name":"Note"}]' [--port N] [--token TOKEN]
   premiere-bridge add-markers-file --file /path/to/markers.json [--port N] [--token TOKEN]
   premiere-bridge update-marker [--transport cep|auto] (--match-name NAME | --match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N) [--match-name NAME] [--name NAME] [--comment TEXT] [--color NAME | --color-index N | --color-value N] [--timecode 00;00;12;00 | --frame N | --seconds S | --ticks N] [--duration-seconds S | --duration-ticks N] [--port N] [--token TOKEN]
+  premiere-bridge delete-markers [--transport cep|auto] [--match-name NAME] [--match-timecode 00;00;10;00 | --match-frame N | --match-seconds S | --match-ticks N | (--in-timecode 00;00;10;00 | --in-frame N | --in-seconds S | --in-ticks N) (--out-timecode 00;00;20;00 | --out-frame N | --out-seconds S | --out-ticks N)] [--all-matches] [--port N] [--token TOKEN]
   premiere-bridge toggle-video-track --track V1 [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
   premiere-bridge set-track-state --track V1|A1 [--kind video|audio] [--visible true|false] [--mute true|false] [--port N] [--token TOKEN]
 
@@ -60,6 +61,7 @@ Notes:
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
+  delete-markers is currently CEP-only. Range deletion matches marker start times inclusively between the in/out bounds.
 `;
   console.log(text.trim());
   process.exit(exitCode || 0);
@@ -907,10 +909,11 @@ function readSinglePointPayload(args, prefix, label) {
   return payload;
 }
 
-function readMarkerMatchPayload(args) {
+function readMarkerMatchPayload(args, options) {
   const payload = {};
   let timeSelectorCount = 0;
   let hasSelector = false;
+  const requireSelector = !options || options.requireSelector !== false;
 
   if (args["match-name"] !== undefined) {
     const name = String(args["match-name"]);
@@ -957,11 +960,110 @@ function readMarkerMatchPayload(args) {
   if (timeSelectorCount > 1) {
     throw new Error("Provide at most one marker time selector via --match-timecode, --match-frame, --match-seconds, or --match-ticks");
   }
-  if (!hasSelector) {
+  if (!hasSelector && requireSelector) {
     throw new Error("Provide at least one marker selector via --match-name, --match-timecode, --match-frame, --match-seconds, or --match-ticks");
   }
 
   return payload;
+}
+
+function readMarkerRangePayload(args) {
+  const payload = {};
+  let inCount = 0;
+  let outCount = 0;
+
+  if (args["in-timecode"] !== undefined) {
+    payload.inTimecode = String(args["in-timecode"]);
+    inCount += 1;
+  }
+  if (args["in-frame"] !== undefined) {
+    const inFrame = Number(args["in-frame"]);
+    if (!Number.isFinite(inFrame) || inFrame < 0) {
+      throw new Error("--in-frame must be a non-negative number");
+    }
+    payload.inFrame = inFrame;
+    inCount += 1;
+  }
+  if (args["in-seconds"] !== undefined) {
+    const inSeconds = Number(args["in-seconds"]);
+    if (!Number.isFinite(inSeconds) || inSeconds < 0) {
+      throw new Error("--in-seconds must be a non-negative number");
+    }
+    payload.inSeconds = inSeconds;
+    inCount += 1;
+  }
+  if (args["in-ticks"] !== undefined) {
+    const inTicks = Number(args["in-ticks"]);
+    if (!Number.isFinite(inTicks) || inTicks < 0) {
+      throw new Error("--in-ticks must be a non-negative number");
+    }
+    payload.inTicks = inTicks;
+    inCount += 1;
+  }
+
+  if (args["out-timecode"] !== undefined) {
+    payload.outTimecode = String(args["out-timecode"]);
+    outCount += 1;
+  }
+  if (args["out-frame"] !== undefined) {
+    const outFrame = Number(args["out-frame"]);
+    if (!Number.isFinite(outFrame) || outFrame < 0) {
+      throw new Error("--out-frame must be a non-negative number");
+    }
+    payload.outFrame = outFrame;
+    outCount += 1;
+  }
+  if (args["out-seconds"] !== undefined) {
+    const outSeconds = Number(args["out-seconds"]);
+    if (!Number.isFinite(outSeconds) || outSeconds < 0) {
+      throw new Error("--out-seconds must be a non-negative number");
+    }
+    payload.outSeconds = outSeconds;
+    outCount += 1;
+  }
+  if (args["out-ticks"] !== undefined) {
+    const outTicks = Number(args["out-ticks"]);
+    if (!Number.isFinite(outTicks) || outTicks < 0) {
+      throw new Error("--out-ticks must be a non-negative number");
+    }
+    payload.outTicks = outTicks;
+    outCount += 1;
+  }
+
+  if ((inCount === 0) !== (outCount === 0)) {
+    throw new Error("Provide both range bounds for delete-markers via one --in-* flag and one --out-* flag");
+  }
+  if (inCount > 1) {
+    throw new Error("Provide exactly one range start via --in-timecode, --in-frame, --in-seconds, or --in-ticks");
+  }
+  if (outCount > 1) {
+    throw new Error("Provide exactly one range end via --out-timecode, --out-frame, --out-seconds, or --out-ticks");
+  }
+
+  return payload;
+}
+
+function readDeleteMarkersPayload(args) {
+  const matchPayload = readMarkerMatchPayload(args, { requireSelector: false });
+  const rangePayload = readMarkerRangePayload(args);
+  const hasExactTimeSelector =
+    matchPayload.matchTimecode !== undefined ||
+    matchPayload.matchFrame !== undefined ||
+    matchPayload.matchSeconds !== undefined ||
+    matchPayload.matchTicks !== undefined;
+  const hasRangeSelector = Object.keys(rangePayload).length > 0;
+  const hasNameSelector = matchPayload.matchName !== undefined;
+
+  if (hasRangeSelector && hasExactTimeSelector) {
+    throw new Error("Use either an exact marker time selector or an --in/--out range for delete-markers, not both");
+  }
+  if (!hasNameSelector && !hasExactTimeSelector && !hasRangeSelector) {
+    throw new Error("Provide --match-name, an exact --match-* time selector, or an --in/--out range for delete-markers");
+  }
+
+  return Object.assign({}, matchPayload, rangePayload, {
+    allMatches: flagEnabled(args, "all-matches")
+  });
 }
 
 function readMarkerUpdatePayload(args) {
@@ -2448,6 +2550,17 @@ async function main() {
     }
     const payload = Object.assign({}, readMarkerMatchPayload(args), readMarkerUpdatePayload(args));
     const result = await sendCommand(config, "updateMarker", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "delete-markers") {
+    const requestedTransport = String(config.transport || "auto").toLowerCase();
+    if (requestedTransport === "uxp") {
+      throw new Error("delete-markers is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readDeleteMarkersPayload(args);
+    const result = await sendCommand(config, "deleteMarkers", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }

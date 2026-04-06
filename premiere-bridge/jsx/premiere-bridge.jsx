@@ -1463,6 +1463,58 @@ PremiereBridge._collectMarkerMatches = function (markerCollection, criteria) {
   return matches;
 };
 
+PremiereBridge._collectMarkerRangeMatches = function (markerCollection, criteria) {
+  var matches = [];
+  if (!markerCollection) {
+    return matches;
+  }
+
+  try {
+    var current = markerCollection.getFirstMarker();
+    while (current) {
+      var ok = true;
+      if (criteria.name !== null && criteria.name !== undefined) {
+        ok = PremiereBridge._markerName(current) === criteria.name;
+      }
+      if (ok) {
+        var currentTicks = PremiereBridge._markerStartTicks(current);
+        if (currentTicks === null || isNaN(Number(currentTicks))) {
+          ok = false;
+        } else {
+          currentTicks = Math.round(Number(currentTicks));
+          ok = currentTicks >= criteria.inTicks && currentTicks <= criteria.outTicks;
+        }
+      }
+      if (ok) {
+        matches.push(current);
+      }
+      current = markerCollection.getNextMarker(current);
+    }
+  } catch (err) {
+  }
+
+  return matches;
+};
+
+PremiereBridge._deleteMarkerReference = function (markerCollection, marker) {
+  if (!markerCollection || !marker) {
+    return false;
+  }
+  try {
+    var deleted = markerCollection.deleteMarker(marker);
+    if (deleted === true || deleted === 1) {
+      return true;
+    }
+  } catch (errDelete1) {
+  }
+  try {
+    markerCollection.deleteMarker(marker);
+    return true;
+  } catch (errDelete2) {
+  }
+  return false;
+};
+
 PremiereBridge.getSequenceInfo = function () {
   try {
     var info = {};
@@ -3188,6 +3240,197 @@ PremiereBridge.updateMarker = function (jsonStr) {
       },
       before: before,
       after: after
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.deleteMarkers = function (jsonStr) {
+  try {
+    var data = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var markerCollection = sequence.markers;
+    var criteria = {
+      mode: null,
+      name: null,
+      timeTicks: null,
+      inTicks: null,
+      outTicks: null
+    };
+
+    if (data.matchName !== undefined && data.matchName !== null) {
+      criteria.name = String(data.matchName);
+      if (!criteria.name.replace(/^\s+|\s+$/g, "")) {
+        return PremiereBridge._err("matchName must be a non-empty string");
+      }
+    }
+
+    var hasExactTimeSelector =
+      data.matchTimecode !== undefined ||
+      data.matchFrame !== undefined ||
+      data.matchSeconds !== undefined ||
+      data.matchTicks !== undefined;
+    var hasRangeSelector =
+      data.inTimecode !== undefined ||
+      data.inFrame !== undefined ||
+      data.inSeconds !== undefined ||
+      data.inTicks !== undefined ||
+      data.outTimecode !== undefined ||
+      data.outFrame !== undefined ||
+      data.outSeconds !== undefined ||
+      data.outTicks !== undefined;
+
+    if (hasExactTimeSelector && hasRangeSelector) {
+      return PremiereBridge._err("Use either an exact marker time selector or an in/out range, not both");
+    }
+
+    if (hasRangeSelector) {
+      criteria.inTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: data.inTimecode,
+        frame: data.inFrame,
+        timeSeconds: data.inSeconds,
+        timeTicks: data.inTicks
+      }, sequence, PremiereBridge._getQeSequence());
+      criteria.outTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: data.outTimecode,
+        frame: data.outFrame,
+        timeSeconds: data.outSeconds,
+        timeTicks: data.outTicks
+      }, sequence, PremiereBridge._getQeSequence());
+      if (criteria.inTicks === null || isNaN(Number(criteria.inTicks)) || criteria.outTicks === null || isNaN(Number(criteria.outTicks))) {
+        return PremiereBridge._err("Invalid marker range");
+      }
+      criteria.inTicks = Math.round(Number(criteria.inTicks));
+      criteria.outTicks = Math.round(Number(criteria.outTicks));
+      if (criteria.outTicks < criteria.inTicks) {
+        return PremiereBridge._err("delete-markers range end must be at or after the range start");
+      }
+      criteria.mode = "range";
+    } else if (hasExactTimeSelector) {
+      criteria.timeTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: data.matchTimecode,
+        frame: data.matchFrame,
+        timeSeconds: data.matchSeconds,
+        timeTicks: data.matchTicks
+      }, sequence, PremiereBridge._getQeSequence());
+      if (criteria.timeTicks === null || isNaN(Number(criteria.timeTicks))) {
+        return PremiereBridge._err("Invalid match time");
+      }
+      criteria.timeTicks = Math.round(Number(criteria.timeTicks));
+      criteria.mode = "exact";
+    } else if (criteria.name !== null) {
+      criteria.mode = "name";
+    } else {
+      return PremiereBridge._err("Provide matchName, an exact match time, or an in/out range");
+    }
+
+    var matches = criteria.mode === "range"
+      ? PremiereBridge._collectMarkerRangeMatches(markerCollection, criteria)
+      : PremiereBridge._collectMarkerMatches(markerCollection, criteria);
+
+    if (!matches.length) {
+      return PremiereBridge._err("No markers matched the requested selector", {
+        criteria: {
+          mode: criteria.mode,
+          name: criteria.name,
+          timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+          timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null,
+          inTicks: criteria.inTicks !== null ? String(criteria.inTicks) : null,
+          inTimecode: criteria.inTicks !== null ? PremiereBridge._ticksToTimecode(criteria.inTicks) : null,
+          outTicks: criteria.outTicks !== null ? String(criteria.outTicks) : null,
+          outTimecode: criteria.outTicks !== null ? PremiereBridge._ticksToTimecode(criteria.outTicks) : null
+        }
+      });
+    }
+
+    var deleteAllMatches = criteria.mode === "range" || data.allMatches === true;
+    if (!deleteAllMatches && matches.length > 1) {
+      var ambiguous = [];
+      var limit = Math.min(matches.length, 5);
+      var j = 0;
+      for (j = 0; j < limit; j++) {
+        ambiguous.push(PremiereBridge._markerSummary(matches[j]));
+      }
+      return PremiereBridge._err("Multiple markers matched the requested selector. Add --all-matches or narrow the selector.", {
+        criteria: {
+          mode: criteria.mode,
+          name: criteria.name,
+          timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+          timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null
+        },
+        matchCount: matches.length,
+        matches: ambiguous
+      });
+    }
+
+    var targets = deleteAllMatches ? matches : [matches[0]];
+    var deleted = [];
+    var deleteErrors = [];
+    var i = 0;
+    for (i = targets.length - 1; i >= 0; i--) {
+      var marker = targets[i];
+      var summary = PremiereBridge._markerSummary(marker);
+      if (PremiereBridge._deleteMarkerReference(markerCollection, marker)) {
+        deleted.unshift(summary);
+      } else {
+        deleteErrors.push({
+          index: i,
+          marker: summary,
+          error: "Failed to delete marker"
+        });
+      }
+    }
+
+    var remainingMatches = criteria.mode === "range"
+      ? PremiereBridge._collectMarkerRangeMatches(markerCollection, criteria)
+      : PremiereBridge._collectMarkerMatches(markerCollection, criteria);
+
+    var expectZeroRemaining = deleteAllMatches || matches.length === 1;
+    if (deleteErrors.length || (expectZeroRemaining && remainingMatches.length)) {
+      var remaining = [];
+      var remainingLimit = Math.min(remainingMatches.length, 5);
+      var r = 0;
+      for (r = 0; r < remainingLimit; r++) {
+        remaining.push(PremiereBridge._markerSummary(remainingMatches[r]));
+      }
+      return PremiereBridge._err("Marker deletion did not complete cleanly", {
+        criteria: {
+          mode: criteria.mode,
+          name: criteria.name,
+          timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+          timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null,
+          inTicks: criteria.inTicks !== null ? String(criteria.inTicks) : null,
+          inTimecode: criteria.inTicks !== null ? PremiereBridge._ticksToTimecode(criteria.inTicks) : null,
+          outTicks: criteria.outTicks !== null ? String(criteria.outTicks) : null,
+          outTimecode: criteria.outTicks !== null ? PremiereBridge._ticksToTimecode(criteria.outTicks) : null
+        },
+        deletedCount: deleted.length,
+        deleted: deleted,
+        remainingCount: remainingMatches.length,
+        remaining: remaining,
+        errors: deleteErrors
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: {
+        mode: criteria.mode,
+        name: criteria.name,
+        timeTicks: criteria.timeTicks !== null ? String(criteria.timeTicks) : null,
+        timecode: criteria.timeTicks !== null ? PremiereBridge._ticksToTimecode(criteria.timeTicks) : null,
+        inTicks: criteria.inTicks !== null ? String(criteria.inTicks) : null,
+        inTimecode: criteria.inTicks !== null ? PremiereBridge._ticksToTimecode(criteria.inTicks) : null,
+        outTicks: criteria.outTicks !== null ? String(criteria.outTicks) : null,
+        outTimecode: criteria.outTicks !== null ? PremiereBridge._ticksToTimecode(criteria.outTicks) : null,
+        allMatches: deleteAllMatches
+      },
+      deletedCount: deleted.length,
+      deleted: deleted
     });
   } catch (err) {
     return PremiereBridge._err(String(err));

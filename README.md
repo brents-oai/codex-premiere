@@ -73,6 +73,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js add-markers --file markers.json
 ./cli/premiere-bridge.js add-markers-file --file markers.json
 ./cli/premiere-bridge.js update-marker --match-name Intro --match-timecode "00;00;01;00" --comment "Tighten open" --timecode "00;00;01;12"
+./cli/premiere-bridge.js delete-markers --match-name Intro --in-timecode "00;00;01;00" --out-timecode "00;00;05;00"
 ./cli/premiere-bridge.js toggle-video-track --track V1 --visible false
 ./cli/premiere-bridge.js set-track-state --track A1 --kind audio --mute true
 ```
@@ -101,6 +102,12 @@ Color indices:
 - Match with `--match-name` and optionally one of `--match-timecode`, `--match-frame`, `--match-seconds`, or `--match-ticks`.
 - Update with any mix of `--name`, `--comment`, `--color` / `--color-index` / `--color-value`, one target position flag (`--timecode`, `--frame`, `--seconds`, or `--ticks`), and optional `--duration-seconds` / `--duration-ticks`.
 - Prefer `--match-timecode` or `--match-frame` when exact frame placement matters.
+
+`delete-markers` selection flags:
+- Delete a single exact match with `--match-name` and/or one of `--match-timecode`, `--match-frame`, `--match-seconds`, or `--match-ticks`.
+- Delete all matches from a non-range selector by adding `--all-matches`.
+- Delete all markers whose start times fall inclusively within a range via one `--in-*` flag and one `--out-*` flag, optionally filtered by `--match-name`.
+- Prefer `--match-timecode`, `--match-frame`, or `--in-timecode` / `--out-timecode` when frame accuracy matters.
 
 ## Commands
 
@@ -133,6 +140,7 @@ Color indices:
 - `add-markers`
 - `add-markers-file`
 - `update-marker` (CEP only; match by name/time and update marker fields deterministically)
+- `delete-markers` (CEP only; delete by exact name/time or by inclusive start-time range)
 - `toggle-video-track`
 - `set-track-state`
 
