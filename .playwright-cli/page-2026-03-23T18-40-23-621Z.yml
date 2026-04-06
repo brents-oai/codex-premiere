@@ -1,0 +1,44 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: CEP Panel
+      - heading "Premiere Bridge" [level=1] [ref=e9]
+      - paragraph [ref=e10]: Run the local bridge, adjust connection settings, and validate Premiere control without leaving the panel.
+    - generic [ref=e11]:
+      - generic [ref=e12]: Runtime
+      - generic [ref=e13]: Bridge offline
+  - main [ref=e14]:
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - generic [ref=e18]: Bridge Control
+        - paragraph [ref=e19]: Start or stop the localhost bridge used by the CLI and CEP command path.
+      - generic [ref=e20]:
+        - button "Start bridge" [disabled] [ref=e21]
+        - button "Stop bridge" [disabled] [ref=e22]
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: Connection
+          - paragraph [ref=e27]: Keep the shared port and auth token in sync with the local bridge config.
+        - button "Save config" [ref=e28] [cursor=pointer]
+      - generic [ref=e29]:
+        - generic [ref=e30]:
+          - generic [ref=e31]: Port
+          - spinbutton "Port" [ref=e32]
+        - generic [ref=e33]:
+          - generic [ref=e34]: Token
+          - generic [ref=e35]:
+            - textbox "Token" [ref=e36]
+            - button "Regenerate" [ref=e37] [cursor=pointer]
+    - generic [ref=e39]:
+      - generic [ref=e41]:
+        - generic [ref=e42]: Quick Checks
+        - paragraph [ref=e43]: Use lightweight actions to confirm bridge health and project responsiveness.
+      - generic [ref=e44]:
+        - button "Ping bridge" [ref=e45] [cursor=pointer]
+        - button "Reload project" [ref=e46] [cursor=pointer]
+    - generic [ref=e47]:
+      - generic [ref=e49]:
+        - generic [ref=e50]: Activity
+        - paragraph [ref=e51]: Recent panel and bridge events. Theme changes, config writes, and command results appear here.
+      - generic [ref=e52]: "[2026-03-23 18:40:23.588] Theme -> dark (no host skin info) [2026-03-23 18:40:23.597] Node integration is unavailable. Check CEF flags in manifest."

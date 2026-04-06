@@ -25,3 +25,10 @@ premiere-bridge-uxp/.uxprc
 transcript*.json
 transcript*-compact.txt
 ranges-*-story.json
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

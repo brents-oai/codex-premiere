@@ -1,15 +1,15 @@
 (function () {
   const logEl = document.getElementById("log");
-  const statusEl = document.getElementById("status");
+  const appEl = document.querySelector(".app");
   const portEl = document.getElementById("port");
   const tokenEl = document.getElementById("token");
   const configPathEl = document.getElementById("configPath");
   const startBtn = document.getElementById("startBtn");
   const stopBtn = document.getElementById("stopBtn");
-  const saveBtn = document.getElementById("saveBtn");
   const regenBtn = document.getElementById("regenBtn");
   const pingBtn = document.getElementById("pingBtn");
   const reloadBtn = document.getElementById("reloadBtn");
+  const moduleToggles = Array.prototype.slice.call(document.querySelectorAll("[data-module] .module-toggle"));
 
   const cep = window.__adobe_cep__;
   const canNode = typeof require === "function";
@@ -145,9 +145,13 @@
   }
 
   function setStatus(isOnline) {
-    statusEl.textContent = isOnline ? "Online" : "Offline";
-    statusEl.classList.toggle("online", isOnline);
-    statusEl.classList.toggle("offline", !isOnline);
+    if (appEl) {
+      appEl.dataset.serverState = isOnline ? "online" : "offline";
+    }
+    startBtn.classList.toggle("emphasis", !isOnline);
+    startBtn.classList.toggle("muted-action", isOnline);
+    stopBtn.classList.toggle("emphasis", isOnline);
+    stopBtn.classList.toggle("muted-action", !isOnline);
     startBtn.disabled = isOnline;
     stopBtn.disabled = !isOnline;
   }
@@ -210,7 +214,18 @@
   function updateFields() {
     portEl.value = config.port;
     tokenEl.value = config.token;
-    configPathEl.textContent = `Config: ${configPath()}`;
+    configPathEl.textContent = `Config path: ${configPath()}`;
+  }
+
+  function setupModules() {
+    moduleToggles.forEach(function (toggle) {
+      toggle.addEventListener("click", function () {
+        const section = toggle.parentNode;
+        const isOpen = section.classList.contains("is-open");
+        section.classList.toggle("is-open", !isOpen);
+        toggle.setAttribute("aria-expanded", !isOpen ? "true" : "false");
+      });
+    });
   }
 
   function slugifyName(value) {
@@ -907,21 +922,46 @@
     });
   }
 
-  function saveAndRestart() {
-    const nextConfig = {
-      port: Number(portEl.value) || DEFAULT_PORT,
-      token: tokenEl.value || crypto.randomBytes(16).toString("hex")
+  function normalizedPortValue(rawValue) {
+    const parsed = Number(rawValue);
+    return parsed >= 1 && parsed <= 65535 ? parsed : DEFAULT_PORT;
+  }
+
+  function persistConnectionConfig(options) {
+    const opts = options || {};
+    const nextPort = normalizedPortValue(portEl.value);
+    const nextToken = tokenEl.value || crypto.randomBytes(16).toString("hex");
+    const portChanged = !config || nextPort !== config.port;
+    const tokenChanged = !config || nextToken !== config.token;
+
+    if (!portChanged && !tokenChanged) {
+      updateFields();
+      return;
+    }
+
+    config = {
+      port: nextPort,
+      token: nextToken
     };
-    config = nextConfig;
-    saveConfig(nextConfig);
+    saveConfig(config);
     updateFields();
-    desiredRunning = true;
-    stopServer({ keepDesired: true });
-    setTimeout(startServer, 200);
+
+    if (portChanged && opts.restartOnPortChange !== false) {
+      log(`Connection updated: port -> ${config.port}`);
+      desiredRunning = true;
+      stopServer({ keepDesired: true });
+      setTimeout(startServer, 200);
+      return;
+    }
+
+    if (tokenChanged) {
+      log("Connection updated: token regenerated");
+    }
   }
 
   function init() {
     applyThemeFromHost();
+    setupModules();
     if (csInterface && themeChangeEvent && csInterface.addEventListener) {
       csInterface.addEventListener(themeChangeEvent, applyThemeFromHost);
     } else if (cep && themeChangeEvent && cep.addEventListener) {
@@ -941,9 +981,15 @@
 
     startBtn.addEventListener("click", startServer);
     stopBtn.addEventListener("click", stopServer);
-    saveBtn.addEventListener("click", saveAndRestart);
+    portEl.addEventListener("change", function () {
+      persistConnectionConfig({ restartOnPortChange: true });
+    });
+    portEl.addEventListener("blur", function () {
+      persistConnectionConfig({ restartOnPortChange: true });
+    });
     regenBtn.addEventListener("click", () => {
       tokenEl.value = crypto.randomBytes(16).toString("hex");
+      persistConnectionConfig({ restartOnPortChange: false });
     });
     pingBtn.addEventListener("click", async () => {
       const result = await handleCommand("ping", {});
