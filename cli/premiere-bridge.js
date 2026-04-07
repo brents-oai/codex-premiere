@@ -27,6 +27,7 @@ Usage:
   premiere-bridge rename-clip-instances --name NAME [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-state --enabled true|false [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-speed-duration (--speed N | --speed-percent N | --duration-seconds S | --duration-ticks N) [--ripple true|false] [--reverse true|false] [--preserve-audio-pitch true|false] [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge replace-clip-source --item-id ID [--selected | --match-name NAME | --timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--track V1|A1] [--kind video|audio] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge nest-selected-clips [--name NAME] [--video-track-index N] [--ignore-track-targeting true|false] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
@@ -71,6 +72,7 @@ Notes:
   rename-clip-instances is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch renames.
   set-clip-state is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch changes.
   set-clip-speed-duration is currently CEP-only and uses the unsupported QE speed API when available, with DOM readback verification.
+  replace-clip-source is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting.
   nest-selected-clips is currently CEP-only and replaces the selected video range with one nested sequence clip. Selected parent audio clips are preserved in place.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
@@ -1583,6 +1585,81 @@ function readSetClipSpeedDurationPayload(args) {
   return payload;
 }
 
+function readReplaceClipSourcePayload(args) {
+  const payload = {};
+
+  if (args["item-id"] === undefined || args["item-id"] === null || String(args["item-id"]).trim() === "") {
+    throw new Error("Provide --item-id for replace-clip-source");
+  }
+  payload.itemId = String(args["item-id"]);
+
+  if (args["match-name"] !== undefined) {
+    const matchName = String(args["match-name"]);
+    if (!matchName.trim()) {
+      throw new Error("--match-name must be a non-empty string");
+    }
+    payload.matchName = matchName;
+  }
+
+  if (args.selected !== undefined) {
+    const selected = boolOrNull(args.selected);
+    if (selected === null) {
+      throw new Error("--selected must be true or false");
+    }
+    payload.selected = selected;
+  }
+
+  if (args.track !== undefined) {
+    payload.track = String(args.track);
+  }
+  if (args.kind !== undefined) {
+    payload.kind = String(args.kind);
+  }
+
+  let timeSelectorCount = 0;
+  if (args.timecode !== undefined) {
+    payload.timecode = String(args.timecode);
+    timeSelectorCount += 1;
+  }
+  if (args.frame !== undefined) {
+    const frame = Number(args.frame);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--frame must be a non-negative number");
+    }
+    payload.frame = frame;
+    timeSelectorCount += 1;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--seconds must be a non-negative number");
+    }
+    payload.seconds = seconds;
+    timeSelectorCount += 1;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--ticks must be a non-negative number");
+    }
+    payload.ticks = ticks;
+    timeSelectorCount += 1;
+  }
+  if (timeSelectorCount > 1) {
+    throw new Error("Provide at most one clip time selector via --timecode, --frame, --seconds, or --ticks");
+  }
+
+  const hasSelector =
+    payload.selected === true ||
+    payload.matchName !== undefined ||
+    timeSelectorCount === 1;
+  if (!hasSelector) {
+    throw new Error("Provide --selected, --match-name, or one of --timecode, --frame, --seconds, or --ticks");
+  }
+
+  return payload;
+}
+
 function readNestSelectedClipsPayload(args) {
   const payload = {};
 
@@ -2136,6 +2213,16 @@ async function main() {
     }
     const payload = readSetClipSpeedDurationPayload(args);
     const result = await sendCommandCep(config, "setClipSpeedDuration", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "replace-clip-source") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("replace-clip-source is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readReplaceClipSourcePayload(args);
+    const result = await sendCommandCep(config, "replaceClipSource", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
