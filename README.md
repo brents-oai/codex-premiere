@@ -56,6 +56,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js find-item --name "C0114.MP4" --contains --limit 5
 ./cli/premiere-bridge.js insert-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
 ./cli/premiere-bridge.js overwrite-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
+./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
@@ -116,6 +117,13 @@ Color indices:
 - Delete all markers whose start times fall inclusively within a range via one `--in-*` flag and one `--out-*` flag, optionally filtered by `--match-name`.
 - Prefer `--match-timecode`, `--match-frame`, or `--in-timecode` / `--out-timecode` when frame accuracy matters.
 
+`rename-clip-instances` targeting flags:
+- Rename one or more timeline clip instances on the active sequence without changing the source project item name.
+- Provide the new instance name with `--name`.
+- Target clips with `--selected`, `--match-name`, or one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
+- Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame` when exact frame placement matters.
+- Rename every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
+
 ## Commands
 
 - `ping`
@@ -130,6 +138,7 @@ Color indices:
 - `find-item`
 - `insert-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
 - `overwrite-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
+- `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`

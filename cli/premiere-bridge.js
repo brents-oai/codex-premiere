@@ -23,6 +23,7 @@ Usage:
   premiere-bridge find-item (--name NAME | --path BIN/ITEM) [--contains] [--case-sensitive] [--limit N] [--port N] [--token TOKEN]
   premiere-bridge insert-clip --item-id ID --video-track-index N --audio-track-index N (--at playhead | --timecode 00;00;10;00 | --seconds S | --ticks N) [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge overwrite-clip --item-id ID --video-track-index N --audio-track-index N (--at playhead | --timecode 00;00;10;00 | --seconds S | --ticks N) [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge rename-clip-instances --name NAME [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
@@ -62,6 +63,7 @@ Notes:
   export-markers is currently CEP-only and requires an explicit output path or output-dir/filename. Format may be inferred from .json/.csv or set via --format.
   insert-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
+  rename-clip-instances is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch renames.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
   delete-markers is currently CEP-only. Range deletion matches marker start times inclusively between the in/out bounds.
@@ -1261,6 +1263,93 @@ function readMarkerUpdatePayload(args) {
   return payload;
 }
 
+function readRenameClipInstancesPayload(args) {
+  const payload = {};
+
+  if (args.name === undefined) {
+    throw new Error("Provide --name for rename-clip-instances");
+  }
+  const desiredName = String(args.name);
+  if (!desiredName.trim()) {
+    throw new Error("--name must be a non-empty string");
+  }
+  payload.name = desiredName;
+
+  if (args["match-name"] !== undefined) {
+    const matchName = String(args["match-name"]);
+    if (!matchName.trim()) {
+      throw new Error("--match-name must be a non-empty string");
+    }
+    payload.matchName = matchName;
+  }
+
+  if (args.selected !== undefined) {
+    const selected = boolOrNull(args.selected);
+    if (selected === null) {
+      throw new Error("--selected must be true or false");
+    }
+    payload.selected = selected;
+  }
+
+  if (args["all-matches"] !== undefined) {
+    const allMatches = boolOrNull(args["all-matches"]);
+    if (allMatches === null) {
+      throw new Error("--all-matches must be true or false");
+    }
+    payload.allMatches = allMatches;
+  }
+
+  if (args.track !== undefined) {
+    payload.track = String(args.track);
+  }
+  if (args.kind !== undefined) {
+    payload.kind = String(args.kind);
+  }
+
+  let timeSelectorCount = 0;
+  if (args.timecode !== undefined) {
+    payload.timecode = String(args.timecode);
+    timeSelectorCount += 1;
+  }
+  if (args.frame !== undefined) {
+    const frame = Number(args.frame);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--frame must be a non-negative number");
+    }
+    payload.frame = frame;
+    timeSelectorCount += 1;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--seconds must be a non-negative number");
+    }
+    payload.seconds = seconds;
+    timeSelectorCount += 1;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--ticks must be a non-negative number");
+    }
+    payload.ticks = ticks;
+    timeSelectorCount += 1;
+  }
+  if (timeSelectorCount > 1) {
+    throw new Error("Provide at most one clip time selector via --timecode, --frame, --seconds, or --ticks");
+  }
+
+  const hasSelector =
+    payload.selected === true ||
+    payload.matchName !== undefined ||
+    timeSelectorCount === 1;
+  if (!hasSelector) {
+    throw new Error("Provide --selected, --match-name, or one of --timecode, --frame, --seconds, or --ticks");
+  }
+
+  return payload;
+}
+
 function boolOrNull(value) {
   if (value === undefined || value === null) {
     return null;
@@ -1744,6 +1833,16 @@ async function main() {
     }
 
     const result = await sendCommandCep(config, "overwriteClip", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "rename-clip-instances") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("rename-clip-instances is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readRenameClipInstancesPayload(args);
+    const result = await sendCommandCep(config, "renameClipInstances", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
