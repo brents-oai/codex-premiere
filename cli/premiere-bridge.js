@@ -25,6 +25,7 @@ Usage:
   premiere-bridge overwrite-clip --item-id ID --video-track-index N --audio-track-index N (--at playhead | --timecode 00;00;10;00 | --seconds S | --ticks N) [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge rename-clip-instances --name NAME [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-state --enabled true|false [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge set-clip-speed-duration (--speed N | --speed-percent N | --duration-seconds S | --duration-ticks N) [--ripple true|false] [--reverse true|false] [--preserve-audio-pitch true|false] [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
@@ -66,6 +67,7 @@ Notes:
   overwrite-clip is currently CEP-only and requires --item-id plus explicit --video-track-index and --audio-track-index destination tracks.
   rename-clip-instances is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch renames.
   set-clip-state is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch changes.
+  set-clip-speed-duration is currently CEP-only and uses the unsupported QE speed API when available, with DOM readback verification.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
   delete-markers is currently CEP-only. Range deletion matches marker start times inclusively between the in/out bounds.
@@ -1440,6 +1442,143 @@ function readSetClipStatePayload(args) {
   return payload;
 }
 
+function readSetClipSpeedDurationPayload(args) {
+  const payload = {};
+  let updateCount = 0;
+
+  if (args.speed !== undefined) {
+    const speed = Number(args.speed);
+    if (!Number.isFinite(speed) || speed <= 0) {
+      throw new Error("--speed must be a positive multiplier, such as 0.5, 1, or 2");
+    }
+    payload.speed = speed;
+    updateCount += 1;
+  }
+  if (args["speed-percent"] !== undefined) {
+    const speedPercent = Number(args["speed-percent"]);
+    if (!Number.isFinite(speedPercent) || speedPercent <= 0) {
+      throw new Error("--speed-percent must be a positive percentage, such as 50, 100, or 200");
+    }
+    payload.speedPercent = speedPercent;
+    updateCount += 1;
+  }
+  if (args["duration-seconds"] !== undefined) {
+    const durationSeconds = Number(args["duration-seconds"]);
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      throw new Error("--duration-seconds must be a positive number");
+    }
+    payload.durationSeconds = durationSeconds;
+    updateCount += 1;
+  }
+  if (args["duration-ticks"] !== undefined) {
+    const durationTicks = Number(args["duration-ticks"]);
+    if (!Number.isFinite(durationTicks) || durationTicks <= 0) {
+      throw new Error("--duration-ticks must be a positive number");
+    }
+    payload.durationTicks = durationTicks;
+    updateCount += 1;
+  }
+  if (updateCount !== 1) {
+    throw new Error("Provide exactly one speed/duration update via --speed, --speed-percent, --duration-seconds, or --duration-ticks");
+  }
+
+  if (args.ripple !== undefined) {
+    const ripple = boolOrNull(args.ripple);
+    if (ripple === null) {
+      throw new Error("--ripple must be true or false");
+    }
+    payload.ripple = ripple;
+  }
+  if (args.reverse !== undefined) {
+    const reverse = boolOrNull(args.reverse);
+    if (reverse === null) {
+      throw new Error("--reverse must be true or false");
+    }
+    payload.reverse = reverse;
+  }
+  if (args["preserve-audio-pitch"] !== undefined) {
+    const preserveAudioPitch = boolOrNull(args["preserve-audio-pitch"]);
+    if (preserveAudioPitch === null) {
+      throw new Error("--preserve-audio-pitch must be true or false");
+    }
+    payload.preserveAudioPitch = preserveAudioPitch;
+  }
+
+  if (args["match-name"] !== undefined) {
+    const matchName = String(args["match-name"]);
+    if (!matchName.trim()) {
+      throw new Error("--match-name must be a non-empty string");
+    }
+    payload.matchName = matchName;
+  }
+
+  if (args.selected !== undefined) {
+    const selected = boolOrNull(args.selected);
+    if (selected === null) {
+      throw new Error("--selected must be true or false");
+    }
+    payload.selected = selected;
+  }
+
+  if (args["all-matches"] !== undefined) {
+    const allMatches = boolOrNull(args["all-matches"]);
+    if (allMatches === null) {
+      throw new Error("--all-matches must be true or false");
+    }
+    payload.allMatches = allMatches;
+  }
+
+  if (args.track !== undefined) {
+    payload.track = String(args.track);
+  }
+  if (args.kind !== undefined) {
+    payload.kind = String(args.kind);
+  }
+
+  let timeSelectorCount = 0;
+  if (args.timecode !== undefined) {
+    payload.timecode = String(args.timecode);
+    timeSelectorCount += 1;
+  }
+  if (args.frame !== undefined) {
+    const frame = Number(args.frame);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--frame must be a non-negative number");
+    }
+    payload.frame = frame;
+    timeSelectorCount += 1;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--seconds must be a non-negative number");
+    }
+    payload.seconds = seconds;
+    timeSelectorCount += 1;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--ticks must be a non-negative number");
+    }
+    payload.ticks = ticks;
+    timeSelectorCount += 1;
+  }
+  if (timeSelectorCount > 1) {
+    throw new Error("Provide at most one clip time selector via --timecode, --frame, --seconds, or --ticks");
+  }
+
+  const hasSelector =
+    payload.selected === true ||
+    payload.matchName !== undefined ||
+    timeSelectorCount === 1;
+  if (!hasSelector) {
+    throw new Error("Provide --selected, --match-name, or one of --timecode, --frame, --seconds, or --ticks");
+  }
+
+  return payload;
+}
+
 function boolOrNull(value) {
   if (value === undefined || value === null) {
     return null;
@@ -1943,6 +2082,16 @@ async function main() {
     }
     const payload = readSetClipStatePayload(args);
     const result = await sendCommandCep(config, "setClipState", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-clip-speed-duration") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("set-clip-speed-duration is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readSetClipSpeedDurationPayload(args);
+    const result = await sendCommandCep(config, "setClipSpeedDuration", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
