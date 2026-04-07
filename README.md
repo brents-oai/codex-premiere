@@ -58,6 +58,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js overwrite-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
+./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
@@ -132,6 +133,15 @@ Color indices:
 - Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame` when exact frame placement matters.
 - Apply the state to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 
+`set-clip-speed-duration` targeting flags:
+- Set speed for one or more timeline clip instances on the active sequence.
+- Set exactly one of `--speed`, `--speed-percent`, `--duration-seconds`, or `--duration-ticks`; duration inputs compute the equivalent speed multiplier from the current visible duration.
+- Optional `--reverse`, `--ripple`, and `--preserve-audio-pitch` flags map to Premiere's speed-change options when the QE speed API is available.
+- Target clips with `--selected`, `--match-name`, or one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
+- Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame` when exact frame placement matters.
+- Apply the update to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
+- The command is CEP-only and uses QE `setSpeed(...)` when present, then verifies the result via the DOM `TrackItem.getSpeed()` and visible duration readback.
+
 ## Commands
 
 - `ping`
@@ -148,6 +158,7 @@ Color indices:
 - `overwrite-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
+- `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`

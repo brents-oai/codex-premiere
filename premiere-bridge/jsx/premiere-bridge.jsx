@@ -6589,6 +6589,720 @@ PremiereBridge.setClipState = function (jsonStr) {
   }
 };
 
+PremiereBridge.setClipSpeedDuration = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var updateCount = 0;
+    if (payload.speed !== undefined && payload.speed !== null) {
+      updateCount++;
+    }
+    if (payload.speedPercent !== undefined && payload.speedPercent !== null) {
+      updateCount++;
+    }
+    if (payload.durationSeconds !== undefined && payload.durationSeconds !== null) {
+      updateCount++;
+    }
+    if (payload.durationTicks !== undefined && payload.durationTicks !== null) {
+      updateCount++;
+    }
+    if (updateCount !== 1) {
+      return PremiereBridge._err("Provide exactly one speed/duration update");
+    }
+
+    var speedAllMatches = payload.allMatches === true;
+    var selectedOnly = payload.selected === true;
+    var matchName = null;
+    if (payload.matchName !== undefined && payload.matchName !== null) {
+      matchName = String(payload.matchName);
+      if (!matchName.replace(/^\s+|\s+$/g, "")) {
+        return PremiereBridge._err("matchName must be a non-empty string");
+      }
+    }
+
+    var trackIndex = null;
+    var kind = payload.kind ? String(payload.kind).toLowerCase() : null;
+    if (payload.track !== undefined && payload.track !== null) {
+      var trackStr = String(payload.track).toUpperCase();
+      if (trackStr.indexOf("V") === 0) {
+        trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "video";
+        }
+      } else if (trackStr.indexOf("A") === 0) {
+        trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "audio";
+        }
+      } else {
+        trackIndex = Number(trackStr) - 1;
+      }
+    } else if (payload.trackNumber !== undefined && payload.trackNumber !== null) {
+      trackIndex = Number(payload.trackNumber) - 1;
+    } else if (payload.trackIndex !== undefined && payload.trackIndex !== null) {
+      trackIndex = Number(payload.trackIndex);
+    }
+
+    if (trackIndex !== null) {
+      if (isNaN(trackIndex) || trackIndex < 0 || Math.round(trackIndex) !== trackIndex) {
+        return PremiereBridge._err("Invalid track identifier");
+      }
+      if (!kind) {
+        return PremiereBridge._err("Track selector requires kind. Use --track V1|A1 or provide --kind video|audio.");
+      }
+    }
+    if (kind && kind !== "video" && kind !== "audio") {
+      return PremiereBridge._err("Invalid track kind; use video or audio");
+    }
+
+    var hasTimeSelector =
+      payload.timecode !== undefined ||
+      payload.frame !== undefined ||
+      payload.seconds !== undefined ||
+      payload.ticks !== undefined;
+    var qeSeq = PremiereBridge._getQeSequence();
+    var targetTicks = null;
+    if (hasTimeSelector) {
+      targetTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: payload.timecode,
+        frame: payload.frame,
+        timeSeconds: payload.seconds,
+        timeTicks: payload.ticks
+      }, sequence, qeSeq);
+      if (targetTicks === null || isNaN(Number(targetTicks))) {
+        return PremiereBridge._err("Invalid clip time selector");
+      }
+      targetTicks = Math.round(Number(targetTicks));
+    }
+
+    if (!selectedOnly && matchName === null && targetTicks === null) {
+      return PremiereBridge._err("Provide selected, matchName, or one of timecode/frame/seconds/ticks");
+    }
+
+    function trackLabel(clipKind, clipTrackIndex) {
+      return (clipKind === "audio" ? "A" : "V") + String(Number(clipTrackIndex) + 1);
+    }
+
+    function boolish(value) {
+      if (value === true || value === false) {
+        return value;
+      }
+      if (value === 1 || value === 0) {
+        return value === 1;
+      }
+      var normalized = String(value).toLowerCase();
+      if (normalized === "true" || normalized === "1" || normalized === "yes") {
+        return true;
+      }
+      if (normalized === "false" || normalized === "0" || normalized === "no") {
+        return false;
+      }
+      return !!value;
+    }
+
+    function numericOrNull(value) {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      var n = Number(value);
+      if (isNaN(n)) {
+        return null;
+      }
+      return n;
+    }
+
+    function timeValueToTicks(value) {
+      try {
+        return PremiereBridge._timeToTicks(value);
+      } catch (errTimeToTicks) {
+      }
+      try {
+        if (value && value.ticks !== undefined && value.ticks !== null) {
+          return numericOrNull(value.ticks);
+        }
+      } catch (errTicks) {
+      }
+      try {
+        if (value && value.seconds !== undefined && value.seconds !== null) {
+          var seconds = numericOrNull(value.seconds);
+          return seconds !== null ? seconds * PremiereBridge.TICKS_PER_SECOND : null;
+        }
+      } catch (errSeconds) {
+      }
+      return numericOrNull(value);
+    }
+
+    function clipName(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.name !== undefined && clip.name !== null) {
+          return String(clip.name);
+        }
+      } catch (errClipName) {
+      }
+      try {
+        if (clip.projectItem && clip.projectItem.name !== undefined && clip.projectItem.name !== null) {
+          return String(clip.projectItem.name);
+        }
+      } catch (errProjectItemName) {
+      }
+      return null;
+    }
+
+    function clipSourceName(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.projectItem && clip.projectItem.name !== undefined && clip.projectItem.name !== null) {
+          return String(clip.projectItem.name);
+        }
+      } catch (errProjectItemName2) {
+      }
+      return null;
+    }
+
+    function clipNodeId(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.nodeId !== undefined && clip.nodeId !== null) {
+          return String(clip.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (clip.id !== undefined && clip.id !== null) {
+          return String(clip.id);
+        }
+      } catch (errLegacyId) {
+      }
+      return null;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function speedState(clip) {
+      var raw = null;
+      var speed = null;
+      var reversed = null;
+      var errors = [];
+      try {
+        if (clip && clip.getSpeed) {
+          raw = clip.getSpeed();
+          speed = numericOrNull(raw);
+        }
+      } catch (errGetSpeed) {
+        errors.push("clip.getSpeed(): " + String(errGetSpeed));
+      }
+      try {
+        if (clip && clip.isSpeedReversed) {
+          reversed = boolish(clip.isSpeedReversed());
+        }
+      } catch (errIsSpeedReversed) {
+        errors.push("clip.isSpeedReversed(): " + String(errIsSpeedReversed));
+      }
+      return {
+        speed: speed,
+        speedPercent: speed !== null ? speed * 100 : null,
+        reversed: reversed,
+        method: clip && clip.getSpeed ? "clip.getSpeed()" : null,
+        raw: raw !== null && raw !== undefined ? String(raw) : null,
+        errors: errors
+      };
+    }
+
+    function summarizeClip(clip, clipKind, clipTrackIndex, clipIndex) {
+      var startTicks = timeValueToTicks(clip && clip.start !== undefined ? clip.start : null);
+      var endTicks = timeValueToTicks(clip && clip.end !== undefined ? clip.end : null);
+      var durationTicks = null;
+      if (startTicks !== null && endTicks !== null) {
+        durationTicks = Math.max(0, Math.round(Number(endTicks) - Number(startTicks)));
+      }
+      return {
+        kind: clipKind,
+        trackIndex: clipTrackIndex,
+        track: trackLabel(clipKind, clipTrackIndex),
+        clipIndex: clipIndex,
+        nodeId: clipNodeId(clip),
+        name: clipName(clip),
+        sourceName: clipSourceName(clip),
+        selected: PremiereBridge._clipSelectionState(clip),
+        speed: speedState(clip),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        duration: summarizeTicks(durationTicks)
+      };
+    }
+
+    function requestedUpdateFromSummary(summary) {
+      var durationTicks = summary && summary.duration && summary.duration.ticks !== null ? Number(summary.duration.ticks) : null;
+      var currentSpeed = summary && summary.speed && summary.speed.speed !== null ? Number(summary.speed.speed) : 1;
+      var requestedDurationTicks = null;
+      var requestedSpeed = null;
+      var source = null;
+
+      if (payload.speed !== undefined && payload.speed !== null) {
+        requestedSpeed = Number(payload.speed);
+        source = "speed";
+      } else if (payload.speedPercent !== undefined && payload.speedPercent !== null) {
+        requestedSpeed = Number(payload.speedPercent) / 100;
+        source = "speedPercent";
+      } else if (payload.durationSeconds !== undefined && payload.durationSeconds !== null) {
+        requestedDurationTicks = Math.round(Number(payload.durationSeconds) * PremiereBridge.TICKS_PER_SECOND);
+        source = "durationSeconds";
+      } else if (payload.durationTicks !== undefined && payload.durationTicks !== null) {
+        requestedDurationTicks = Math.round(Number(payload.durationTicks));
+        source = "durationTicks";
+      }
+
+      if (requestedDurationTicks !== null) {
+        if (durationTicks === null || durationTicks <= 0) {
+          return { ok: false, error: "Unable to compute current clip duration for duration-based speed update" };
+        }
+        if (requestedDurationTicks <= 0) {
+          return { ok: false, error: "Requested duration must be positive" };
+        }
+        requestedSpeed = currentSpeed * (durationTicks / requestedDurationTicks);
+      }
+
+      if (requestedSpeed === null || isNaN(Number(requestedSpeed)) || Number(requestedSpeed) <= 0) {
+        return { ok: false, error: "Requested speed must be positive" };
+      }
+
+      return {
+        ok: true,
+        speed: Number(requestedSpeed),
+        speedPercent: Number(requestedSpeed) * 100,
+        durationTicks: requestedDurationTicks,
+        duration: summarizeTicks(requestedDurationTicks),
+        source: source,
+        reverse: payload.reverse !== undefined && payload.reverse !== null
+          ? boolish(payload.reverse)
+          : (summary && summary.speed ? summary.speed.reversed : false),
+        preserveAudioPitch: payload.preserveAudioPitch !== undefined && payload.preserveAudioPitch !== null
+          ? boolish(payload.preserveAudioPitch)
+          : true,
+        ripple: payload.ripple === true
+      };
+    }
+
+    function criteriaSummary() {
+      return {
+        selected: selectedOnly,
+        matchName: matchName,
+        kind: kind,
+        trackIndex: trackIndex,
+        track: trackIndex !== null && kind ? trackLabel(kind, trackIndex) : null,
+        timeTicks: targetTicks !== null ? String(targetTicks) : null,
+        timecode: targetTicks !== null ? PremiereBridge._ticksToTimecode(targetTicks) : null,
+        allMatches: speedAllMatches,
+        speed: payload.speed !== undefined ? payload.speed : null,
+        speedPercent: payload.speedPercent !== undefined ? payload.speedPercent : null,
+        durationSeconds: payload.durationSeconds !== undefined ? payload.durationSeconds : null,
+        durationTicks: payload.durationTicks !== undefined ? payload.durationTicks : null,
+        reverse: payload.reverse !== undefined ? payload.reverse : null,
+        preserveAudioPitch: payload.preserveAudioPitch !== undefined ? payload.preserveAudioPitch : true,
+        ripple: payload.ripple === true
+      };
+    }
+
+    function tickTolerance() {
+      var oneFrameTicks = null;
+      try {
+        oneFrameTicks = PremiereBridge._frameToTicks(1, sequence, qeSeq) - PremiereBridge._frameToTicks(0, sequence, qeSeq);
+      } catch (errFrameTicks) {
+      }
+      if (oneFrameTicks === null || isNaN(Number(oneFrameTicks)) || Number(oneFrameTicks) <= 0) {
+        oneFrameTicks = PremiereBridge.TICKS_PER_SECOND / 60;
+      }
+      return Math.max(2, Math.round(Number(oneFrameTicks) / 2));
+    }
+
+    function closeEnoughNumber(actual, expected) {
+      if (actual === null || actual === undefined || expected === null || expected === undefined) {
+        return false;
+      }
+      var a = Number(actual);
+      var e = Number(expected);
+      if (isNaN(a) || isNaN(e)) {
+        return false;
+      }
+      return Math.abs(a - e) <= Math.max(0.005, Math.abs(e) * 0.005);
+    }
+
+    function closeEnoughTicks(actual, expected) {
+      if (actual === null || actual === undefined || expected === null || expected === undefined) {
+        return false;
+      }
+      var a = Number(actual);
+      var e = Number(expected);
+      if (isNaN(a) || isNaN(e)) {
+        return false;
+      }
+      return Math.abs(a - e) <= tickTolerance();
+    }
+
+    function getQeItemCount(track) {
+      if (!track) {
+        return null;
+      }
+      var n = null;
+      try {
+        if (track.numItems !== undefined && track.numItems !== null) {
+          n = typeof track.numItems === "function" ? Number(track.numItems()) : Number(track.numItems);
+          if (!isNaN(n) && n >= 0) {
+            return Math.round(n);
+          }
+        }
+      } catch (errNumItems) {
+      }
+      try {
+        if (track.clips && track.clips.numItems !== undefined && track.clips.numItems !== null) {
+          n = Number(track.clips.numItems);
+          if (!isNaN(n) && n >= 0) {
+            return Math.round(n);
+          }
+        }
+      } catch (errClipNumItems) {
+      }
+      return null;
+    }
+
+    function qeItemTimes(item) {
+      var start = null;
+      var end = null;
+      try {
+        if (item && item.start !== undefined && item.start !== null) {
+          start = timeValueToTicks(item.start);
+        }
+      } catch (errStart) {
+      }
+      try {
+        if (item && item.end !== undefined && item.end !== null) {
+          end = timeValueToTicks(item.end);
+        }
+      } catch (errEnd) {
+      }
+      return {
+        startTicks: start !== null && !isNaN(Number(start)) ? Math.round(Number(start)) : null,
+        endTicks: end !== null && !isNaN(Number(end)) ? Math.round(Number(end)) : null
+      };
+    }
+
+    function findQeTrackItem(target) {
+      var errors = [];
+      if (!qeSeq) {
+        return { item: null, method: null, errors: ["QE sequence unavailable"] };
+      }
+      var getterName = target.kind === "audio" ? "getAudioTrackAt" : "getVideoTrackAt";
+      if (!qeSeq[getterName]) {
+        return { item: null, method: null, errors: ["QE " + getterName + " unavailable"] };
+      }
+      var qeTrack = null;
+      try {
+        qeTrack = qeSeq[getterName](target.trackIndex);
+      } catch (errQeTrack) {
+        return { item: null, method: null, errors: ["QE track lookup failed: " + String(errQeTrack)] };
+      }
+      if (!qeTrack || !qeTrack.getItemAt) {
+        return { item: null, method: null, errors: ["QE track item lookup unavailable"] };
+      }
+
+      var beforeStart = target.before.start && target.before.start.ticks !== null ? Number(target.before.start.ticks) : null;
+      var beforeEnd = target.before.end && target.before.end.ticks !== null ? Number(target.before.end.ticks) : null;
+      var count = getQeItemCount(qeTrack);
+      var limit = count !== null ? Math.min(count, 512) : 512;
+      var misses = 0;
+      for (var i = 0; i < limit; i++) {
+        var item = null;
+        try {
+          item = qeTrack.getItemAt(i);
+        } catch (errQeItem) {
+          errors.push("qeTrack.getItemAt(" + i + "): " + String(errQeItem));
+          if (count === null) {
+            break;
+          }
+        }
+        if (!item) {
+          misses++;
+          if (count === null && misses > 12) {
+            break;
+          }
+          continue;
+        }
+        misses = 0;
+        if (!item.setSpeed) {
+          continue;
+        }
+        var times = qeItemTimes(item);
+        var startMatches = beforeStart !== null && times.startTicks !== null && closeEnoughTicks(times.startTicks, beforeStart);
+        var endMatches = beforeEnd !== null && times.endTicks !== null && closeEnoughTicks(times.endTicks, beforeEnd);
+        if (startMatches && (endMatches || beforeEnd === null || times.endTicks === null)) {
+          return { item: item, method: "qe." + getterName + "(" + target.trackIndex + ").getItemAt(" + i + ")", errors: errors };
+        }
+      }
+      return { item: null, method: null, errors: errors.length ? errors : ["No matching QE track item with setSpeed found"] };
+    }
+
+    function applySpeed(target, requested) {
+      var qeMatch = findQeTrackItem(target);
+      if (!qeMatch.item) {
+        return { ok: false, method: qeMatch.method, errors: qeMatch.errors };
+      }
+      var durationArg = requested.durationTicks !== null && requested.durationTicks !== undefined
+        ? PremiereBridge._ticksToTimecode(requested.durationTicks)
+        : "";
+      try {
+        qeMatch.item.setSpeed(
+          requested.speed,
+          durationArg,
+          requested.reverse === true,
+          requested.preserveAudioPitch === true,
+          requested.ripple === true
+        );
+        return {
+          ok: true,
+          method: qeMatch.method + ".setSpeed(speed, duration, reverse, preserveAudioPitch, ripple)",
+          durationArg: durationArg,
+          errors: qeMatch.errors
+        };
+      } catch (errSetSpeed) {
+        qeMatch.errors.push("qeTrackItem.setSpeed: " + String(errSetSpeed));
+      }
+      return { ok: false, method: qeMatch.method, errors: qeMatch.errors };
+    }
+
+    var matched = [];
+    var requestedTrackFound = trackIndex === null;
+
+    function collect(kindName, trackCollection) {
+      if (!trackCollection) {
+        return;
+      }
+      if (kind && kind !== kindName) {
+        return;
+      }
+      var trackCount = PremiereBridge._collectionCount(trackCollection, 64);
+      for (var t = 0; t < trackCount; t++) {
+        if (trackIndex !== null && t !== trackIndex) {
+          continue;
+        }
+        var track = null;
+        try {
+          track = trackCollection[t];
+        } catch (errTrackGet) {
+        }
+        if (!track) {
+          continue;
+        }
+        requestedTrackFound = true;
+        if (!track.clips) {
+          continue;
+        }
+        var clipCount = PremiereBridge._collectionCount(track.clips, 512);
+        for (var c = 0; c < clipCount; c++) {
+          var clip = null;
+          try {
+            clip = track.clips[c];
+          } catch (errClipGet) {
+          }
+          if (!clip) {
+            continue;
+          }
+          var summary = summarizeClip(clip, kindName, t, c);
+          if (selectedOnly && !summary.selected) {
+            continue;
+          }
+          if (matchName !== null && summary.name !== matchName) {
+            continue;
+          }
+          if (targetTicks !== null) {
+            var startTicks = summary.start.ticks !== null ? Number(summary.start.ticks) : null;
+            var endTicks = summary.end.ticks !== null ? Number(summary.end.ticks) : null;
+            if (startTicks === null || endTicks === null) {
+              continue;
+            }
+            if (!(targetTicks >= startTicks && targetTicks < endTicks)) {
+              continue;
+            }
+          }
+          matched.push({
+            clip: clip,
+            kind: kindName,
+            trackIndex: t,
+            clipIndex: c,
+            before: summary
+          });
+        }
+      }
+    }
+
+    collect("video", sequence.videoTracks);
+    collect("audio", sequence.audioTracks);
+
+    if (!requestedTrackFound) {
+      return PremiereBridge._err(kind === "audio" ? "Audio track not found" : "Video track not found", {
+        criteria: criteriaSummary()
+      });
+    }
+
+    if (!matched.length) {
+      return PremiereBridge._err("No clip instances matched the requested selector", {
+        criteria: criteriaSummary()
+      });
+    }
+
+    if (!speedAllMatches && matched.length > 1) {
+      var ambiguous = [];
+      var ambiguousLimit = Math.min(matched.length, 5);
+      for (var a = 0; a < ambiguousLimit; a++) {
+        ambiguous.push(matched[a].before);
+      }
+      return PremiereBridge._err("Multiple clip instances matched the requested selector. Add --all-matches or narrow the selector.", {
+        criteria: criteriaSummary(),
+        matchCount: matched.length,
+        matches: ambiguous
+      });
+    }
+
+    var targets = speedAllMatches ? matched : [matched[0]];
+    var preparedTargets = [];
+    for (var prep = 0; prep < targets.length; prep++) {
+      var requested = requestedUpdateFromSummary(targets[prep].before);
+      if (!requested.ok) {
+        return PremiereBridge._err(requested.error, {
+          criteria: criteriaSummary(),
+          target: targets[prep].before
+        });
+      }
+      preparedTargets.push({ target: targets[prep], requested: requested });
+    }
+
+    if (payload.dryRun === true) {
+      var dryRunMatches = [];
+      for (var d = 0; d < preparedTargets.length; d++) {
+        dryRunMatches.push({
+          requested: preparedTargets[d].requested,
+          before: preparedTargets[d].target.before
+        });
+      }
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        criteria: criteriaSummary(),
+        matchedCount: matched.length,
+        targetCount: preparedTargets.length,
+        matches: dryRunMatches,
+        availability: {
+          qeAvailable: !!qeSeq,
+          domGetSpeed: !!(preparedTargets.length && preparedTargets[0].target.clip && preparedTargets[0].target.clip.getSpeed)
+        }
+      });
+    }
+
+    var changed = [];
+    var unchanged = [];
+    var errors = [];
+    for (var i = 0; i < preparedTargets.length; i++) {
+      var prepared = preparedTargets[i];
+      var target = prepared.target;
+      var req = prepared.requested;
+      var beforeSpeedMatches = target.before.speed && closeEnoughNumber(target.before.speed.speed, req.speed);
+      var beforeReverseMatches = target.before.speed && target.before.speed.reversed !== null
+        ? target.before.speed.reversed === req.reverse
+        : true;
+      var beforeDurationMatches = req.durationTicks !== null
+        ? (target.before.duration && closeEnoughTicks(target.before.duration.ticks, req.durationTicks))
+        : true;
+      if (beforeSpeedMatches && beforeReverseMatches && beforeDurationMatches) {
+        unchanged.push({
+          method: "noop",
+          requested: req,
+          before: target.before,
+          after: target.before
+        });
+        continue;
+      }
+
+      var setResult = applySpeed(target, req);
+      var after = summarizeClip(target.clip, target.kind, target.trackIndex, target.clipIndex);
+      var speedMatches = after.speed && closeEnoughNumber(after.speed.speed, req.speed);
+      var reverseMatches = after.speed && after.speed.reversed !== null ? after.speed.reversed === req.reverse : true;
+      var durationMatches = req.durationTicks !== null
+        ? (after.duration && closeEnoughTicks(after.duration.ticks, req.durationTicks))
+        : true;
+
+      if (setResult.ok && speedMatches && reverseMatches && durationMatches) {
+        changed.push({
+          method: setResult.method,
+          requested: req,
+          before: target.before,
+          after: after,
+          qeDurationArg: setResult.durationArg,
+          fallbackErrors: setResult.errors
+        });
+      } else {
+        errors.push({
+          method: setResult.method,
+          requested: req,
+          before: target.before,
+          after: after,
+          error: setResult.ok ? "Clip speed/duration did not verify after setSpeed" : "No supported QE track item speed setter",
+          verification: {
+            speedMatches: speedMatches,
+            reverseMatches: reverseMatches,
+            durationMatches: durationMatches
+          },
+          fallbackErrors: setResult.errors
+        });
+      }
+    }
+
+    if (errors.length) {
+      return PremiereBridge._err("Failed to set one or more clip speed/duration values", {
+        criteria: criteriaSummary(),
+        matchedCount: matched.length,
+        targetCount: preparedTargets.length,
+        changedCount: changed.length,
+        unchangedCount: unchanged.length,
+        changed: changed,
+        unchanged: unchanged,
+        errors: errors
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteriaSummary(),
+      matchedCount: matched.length,
+      targetCount: preparedTargets.length,
+      changedCount: changed.length,
+      unchangedCount: unchanged.length,
+      changed: changed,
+      unchanged: unchanged
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.setTrackState = function (jsonStr) {
   try {
     var payload = PremiereBridge._parse(jsonStr) || {};

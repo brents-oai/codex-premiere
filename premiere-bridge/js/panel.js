@@ -618,6 +618,7 @@
     "overwriteClip",
     "renameClipInstances",
     "setClipState",
+    "setClipSpeedDuration",
     "addMarkers",
     "addMarkersFromFile",
     "updateMarker",
@@ -963,6 +964,12 @@
         return evalExtendScript("setClipState", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("setClipState", cleanPayload);
+    }
+    if (command === "setClipSpeedDuration") {
+      if (dryRun) {
+        return evalExtendScript("setClipSpeedDuration", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("setClipSpeedDuration", cleanPayload);
     }
     if (command === "setInPoint") {
       if (dryRun) {
