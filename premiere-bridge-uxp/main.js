@@ -67,6 +67,7 @@ const MUTATING_COMMANDS = new Set([
   "renameClipInstances",
   "setClipState",
   "setClipSpeedDuration",
+  "nestSelectedClips",
   "addMarkers",
   "addMarkersFromFile",
   "exportMarkers",
@@ -2296,6 +2297,9 @@ async function handleCommand(command, payload) {
   }
   if (command === "setClipSpeedDuration") {
     return { ok: false, error: "set-clip-speed-duration is currently supported only on CEP. Use --transport cep." };
+  }
+  if (command === "nestSelectedClips") {
+    return { ok: false, error: "nest-selected-clips is currently supported only on CEP. Use --transport cep." };
   }
   if (dryRun && MUTATING_COMMANDS.has(command)) {
     return {
