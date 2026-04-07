@@ -617,6 +617,7 @@
     "insertClip",
     "overwriteClip",
     "renameClipInstances",
+    "setClipState",
     "addMarkers",
     "addMarkersFromFile",
     "updateMarker",
@@ -956,6 +957,12 @@
         return evalExtendScript("renameClipInstances", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("renameClipInstances", cleanPayload);
+    }
+    if (command === "setClipState") {
+      if (dryRun) {
+        return evalExtendScript("setClipState", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("setClipState", cleanPayload);
     }
     if (command === "setInPoint") {
       if (dryRun) {
