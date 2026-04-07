@@ -64,6 +64,7 @@ const MUTATING_COMMANDS = new Set([
   "saveProject",
   "duplicateSequence",
   "openSequence",
+  "renameClipInstances",
   "addMarkers",
   "addMarkersFromFile",
   "exportMarkers",
@@ -2284,6 +2285,9 @@ async function handleCommand(command, payload) {
   }
   if (command === "clearMarkers") {
     return { ok: false, error: "clear-markers is currently supported only on CEP. Use --transport cep." };
+  }
+  if (command === "renameClipInstances") {
+    return { ok: false, error: "rename-clip-instances is currently supported only on CEP. Use --transport cep." };
   }
   if (dryRun && MUTATING_COMMANDS.has(command)) {
     return {
