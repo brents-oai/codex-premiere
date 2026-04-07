@@ -7303,6 +7303,873 @@ PremiereBridge.setClipSpeedDuration = function (jsonStr) {
   }
 };
 
+PremiereBridge.nestSelectedClips = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var project = app.project;
+    var sequence = project && project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+    if (!sequence.createSubsequence) {
+      return PremiereBridge._err("sequence.createSubsequence is unavailable; cannot create the nested sequence source");
+    }
+
+    function boolish(value, defaultValue) {
+      if (value === undefined || value === null) {
+        return defaultValue;
+      }
+      if (value === true || value === false) {
+        return value;
+      }
+      var normalized = String(value).toLowerCase();
+      if (normalized === "true" || normalized === "1" || normalized === "yes") {
+        return true;
+      }
+      if (normalized === "false" || normalized === "0" || normalized === "no") {
+        return false;
+      }
+      return !!value;
+    }
+
+    function toIntegerOrNull(value) {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      var n = Number(value);
+      if (isNaN(n) || n < 0 || Math.round(n) !== n) {
+        return null;
+      }
+      return Math.round(n);
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function trackLabel(kind, trackIndex) {
+      return (kind === "audio" ? "A" : "V") + String(Number(trackIndex) + 1);
+    }
+
+    function itemName(clip) {
+      try {
+        if (clip && clip.name !== undefined && clip.name !== null) {
+          return String(clip.name);
+        }
+      } catch (errClipName) {
+      }
+      try {
+        if (clip && clip.projectItem && clip.projectItem.name !== undefined && clip.projectItem.name !== null) {
+          return String(clip.projectItem.name);
+        }
+      } catch (errProjectName) {
+      }
+      return null;
+    }
+
+    function itemNodeId(clip) {
+      try {
+        if (clip && clip.nodeId !== undefined && clip.nodeId !== null) {
+          return String(clip.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (clip && clip.id !== undefined && clip.id !== null) {
+          return String(clip.id);
+        }
+      } catch (errId) {
+      }
+      return null;
+    }
+
+    function getTrack(collection, index) {
+      if (!collection || index === null || index === undefined || index < 0) {
+        return null;
+      }
+      try {
+        if (collection[index]) {
+          return collection[index];
+        }
+      } catch (errTrack) {
+      }
+      return null;
+    }
+
+    function clipCount(track) {
+      if (!track || !track.clips) {
+        return 0;
+      }
+      return PremiereBridge._collectionCount(track.clips, 4096);
+    }
+
+    function summarizeClip(clip, kind, trackIndex, clipIndex) {
+      var startTicks = PremiereBridge._timeToTicks(clip && clip.start !== undefined ? clip.start : null);
+      var endTicks = PremiereBridge._timeToTicks(clip && clip.end !== undefined ? clip.end : null);
+      var isSequence = false;
+      try {
+        if (clip && clip.projectItem && clip.projectItem.isSequence !== undefined && clip.projectItem.isSequence !== null) {
+          if (typeof clip.projectItem.isSequence === "function") {
+            isSequence = !!clip.projectItem.isSequence();
+          } else {
+            isSequence = !!clip.projectItem.isSequence;
+          }
+        }
+      } catch (errIsSequence) {
+      }
+      return {
+        kind: kind,
+        trackIndex: trackIndex,
+        track: trackLabel(kind, trackIndex),
+        clipIndex: clipIndex,
+        nodeId: itemNodeId(clip),
+        name: itemName(clip),
+        sourceName: (clip && clip.projectItem && clip.projectItem.name) ? String(clip.projectItem.name) : null,
+        selected: PremiereBridge._clipSelectionState(clip),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        isSequence: isSequence
+      };
+    }
+
+    function snapshotTrack(kind, trackIndex, bounds) {
+      var track = getTrack(kind === "audio" ? sequence.audioTracks : sequence.videoTracks, trackIndex);
+      var clips = [];
+      if (!track || !track.clips) {
+        return {
+          kind: kind,
+          trackIndex: trackIndex,
+          track: trackLabel(kind, trackIndex),
+          clipCount: 0,
+          clips: clips
+        };
+      }
+      var count = clipCount(track);
+      for (var i = 0; i < count; i++) {
+        var clip = null;
+        try {
+          clip = track.clips[i];
+        } catch (errClip) {
+        }
+        if (!clip) {
+          continue;
+        }
+        var summary = summarizeClip(clip, kind, trackIndex, i);
+        var startTicks = summary.start && summary.start.ticks !== null ? Number(summary.start.ticks) : null;
+        var endTicks = summary.end && summary.end.ticks !== null ? Number(summary.end.ticks) : null;
+        if (bounds && startTicks !== null && endTicks !== null) {
+          if (!(endTicks > bounds.inTicks && startTicks < bounds.outTicks)) {
+            continue;
+          }
+        }
+        clips.push(summary);
+      }
+      return {
+        kind: kind,
+        trackIndex: trackIndex,
+        track: trackLabel(kind, trackIndex),
+        clipCount: count,
+        clips: clips
+      };
+    }
+
+    function snapshotTracks(selection, bounds, videoTrackIndex, audioTrackIndex) {
+      var usedVideo = {};
+      var usedAudio = {};
+      for (var i = 0; selection && i < selection.length; i++) {
+        if (selection[i].kind === "audio") {
+          usedAudio[String(selection[i].trackIndex)] = selection[i].trackIndex;
+        } else {
+          usedVideo[String(selection[i].trackIndex)] = selection[i].trackIndex;
+        }
+      }
+      if (videoTrackIndex !== null && videoTrackIndex !== undefined) {
+        usedVideo[String(videoTrackIndex)] = videoTrackIndex;
+      }
+      if (audioTrackIndex !== null && audioTrackIndex !== undefined) {
+        usedAudio[String(audioTrackIndex)] = audioTrackIndex;
+      }
+      var video = [];
+      var audio = [];
+      for (var vk in usedVideo) {
+        if (usedVideo[vk] !== undefined && usedVideo[vk] !== null) {
+          video.push(snapshotTrack("video", usedVideo[vk], bounds));
+        }
+      }
+      for (var ak in usedAudio) {
+        if (usedAudio[ak] !== undefined && usedAudio[ak] !== null) {
+          audio.push(snapshotTrack("audio", usedAudio[ak], bounds));
+        }
+      }
+      return { video: video, audio: audio };
+    }
+
+    function snapshotChanged(beforeSnapshot, afterSnapshot) {
+      if (!beforeSnapshot || !afterSnapshot) {
+        return true;
+      }
+      var beforeVideo = beforeSnapshot.video || [];
+      var afterVideo = afterSnapshot.video || [];
+      var beforeAudio = beforeSnapshot.audio || [];
+      var afterAudio = afterSnapshot.audio || [];
+      if (beforeVideo.length !== afterVideo.length || beforeAudio.length !== afterAudio.length) {
+        return true;
+      }
+      function tracksChanged(beforeTracks, afterTracks) {
+        for (var ti = 0; ti < beforeTracks.length; ti++) {
+          var beforeTrack = beforeTracks[ti];
+          var afterTrack = afterTracks[ti];
+          if (!beforeTrack || !afterTrack) {
+            return true;
+          }
+          if (beforeTrack.trackIndex !== afterTrack.trackIndex || beforeTrack.clipCount !== afterTrack.clipCount) {
+            return true;
+          }
+          var beforeClips = beforeTrack.clips || [];
+          var afterClips = afterTrack.clips || [];
+          if (beforeClips.length !== afterClips.length) {
+            return true;
+          }
+          for (var ci = 0; ci < beforeClips.length; ci++) {
+            var beforeClip = beforeClips[ci];
+            var afterClip = afterClips[ci];
+            if (!beforeClip || !afterClip) {
+              return true;
+            }
+            if (
+              beforeClip.name !== afterClip.name ||
+              beforeClip.nodeId !== afterClip.nodeId ||
+              beforeClip.clipIndex !== afterClip.clipIndex ||
+              String(beforeClip.start ? beforeClip.start.ticks : "") !== String(afterClip.start ? afterClip.start.ticks : "") ||
+              String(beforeClip.end ? beforeClip.end.ticks : "") !== String(afterClip.end ? afterClip.end.ticks : "")
+            ) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+      return tracksChanged(beforeVideo, afterVideo) || tracksChanged(beforeAudio, afterAudio);
+    }
+
+    function flattenSelectedSnapshot(snapshot) {
+      var selected = [];
+      function collect(tracks) {
+        for (var ti = 0; tracks && ti < tracks.length; ti++) {
+          var track = tracks[ti];
+          for (var ci = 0; track && track.clips && ci < track.clips.length; ci++) {
+            if (track.clips[ci] && track.clips[ci].selected) {
+              selected.push(track.clips[ci]);
+            }
+          }
+        }
+      }
+      collect(snapshot ? snapshot.video : null);
+      collect(snapshot ? snapshot.audio : null);
+      return selected;
+    }
+
+    function filterClipsByKind(clips, kind) {
+      var filtered = [];
+      for (var f = 0; clips && f < clips.length; f++) {
+        if (clips[f] && clips[f].kind === kind) {
+          filtered.push(clips[f]);
+        }
+      }
+      return filtered;
+    }
+
+    function clipMatchesSummary(clip, summary, kind, trackIndex, clipIndex) {
+      var current = summarizeClip(clip, kind, trackIndex, clipIndex);
+      if (summary.nodeId && current.nodeId && String(summary.nodeId) === String(current.nodeId)) {
+        return { ok: true, summary: current };
+      }
+      var summaryStart = summary.start && summary.start.ticks !== null ? String(summary.start.ticks) : "";
+      var currentStart = current.start && current.start.ticks !== null ? String(current.start.ticks) : "";
+      var summaryEnd = summary.end && summary.end.ticks !== null ? String(summary.end.ticks) : "";
+      var currentEnd = current.end && current.end.ticks !== null ? String(current.end.ticks) : "";
+      var summaryName = summary.name !== null && summary.name !== undefined ? String(summary.name) : "";
+      var currentName = current.name !== null && current.name !== undefined ? String(current.name) : "";
+      return {
+        ok: summary.kind === kind &&
+          Number(summary.trackIndex) === Number(trackIndex) &&
+          summaryName === currentName &&
+          summaryStart === currentStart &&
+          summaryEnd === currentEnd,
+        summary: current
+      };
+    }
+
+    function findClipBySummary(summary) {
+      var track = getTrack(summary.kind === "audio" ? sequence.audioTracks : sequence.videoTracks, summary.trackIndex);
+      if (!track || !track.clips) {
+        return null;
+      }
+      var count = clipCount(track);
+      for (var i = 0; i < count; i++) {
+        var clip = null;
+        try {
+          clip = track.clips[i];
+        } catch (errClipGet) {
+        }
+        if (!clip) {
+          continue;
+        }
+        var match = clipMatchesSummary(clip, summary, summary.kind, summary.trackIndex, i);
+        if (match.ok) {
+          return {
+            clip: clip,
+            summary: match.summary
+          };
+        }
+      }
+      return null;
+    }
+
+    function removeOriginalClips(selectedBeforeClips) {
+      var removed = [];
+      var removeErrors = [];
+      for (var ri = selectedBeforeClips.length - 1; ri >= 0; ri--) {
+        var beforeClip = selectedBeforeClips[ri];
+        var match = findClipBySummary(beforeClip);
+        if (!match || !match.clip) {
+          removed.push({
+            method: "not-found",
+            before: beforeClip
+          });
+          continue;
+        }
+        if (!match.clip.remove) {
+          removeErrors.push({
+            before: beforeClip,
+            error: "TrackItem.remove is unavailable"
+          });
+          continue;
+        }
+        var removeMethod = null;
+        try {
+          match.clip.remove(false, false);
+          removeMethod = "trackItem.remove(false, false)";
+        } catch (errRemoveBool) {
+          try {
+            match.clip.remove(0, 0);
+            removeMethod = "trackItem.remove(0, 0)";
+          } catch (errRemoveNumber) {
+            removeErrors.push({
+              before: beforeClip,
+              error: "trackItem.remove(false, false): " + String(errRemoveBool) + "; trackItem.remove(0, 0): " + String(errRemoveNumber)
+            });
+          }
+        }
+        if (removeMethod) {
+          removed.push({
+            method: removeMethod,
+            before: beforeClip,
+            removed: match.summary
+          });
+        }
+      }
+      return {
+        removed: removed,
+        errors: removeErrors
+      };
+    }
+
+    function remainingOriginalClips(selectedBeforeClips) {
+      var remaining = [];
+      for (var ri = 0; ri < selectedBeforeClips.length; ri++) {
+        var match = findClipBySummary(selectedBeforeClips[ri]);
+        if (match && match.summary) {
+          remaining.push(match.summary);
+        }
+      }
+      return remaining;
+    }
+
+    function clipMatchesNestedRange(summary, nestedName, bounds) {
+      if (!summary || summary.kind !== "audio" || !bounds) {
+        return false;
+      }
+      var startTicks = summary.start && summary.start.ticks !== null ? Number(summary.start.ticks) : null;
+      var endTicks = summary.end && summary.end.ticks !== null ? Number(summary.end.ticks) : null;
+      if (
+        startTicks === null ||
+        endTicks === null ||
+        startTicks !== Math.round(Number(bounds.inTicks)) ||
+        endTicks !== Math.round(Number(bounds.outTicks))
+      ) {
+        return false;
+      }
+      var name = summary.name !== null && summary.name !== undefined ? String(summary.name) : "";
+      var sourceName = summary.sourceName !== null && summary.sourceName !== undefined ? String(summary.sourceName) : "";
+      var expectedName = nestedName !== null && nestedName !== undefined ? String(nestedName) : "";
+      return expectedName && (name === expectedName || sourceName === expectedName);
+    }
+
+    function findNestedAudioClips(nestedName, bounds) {
+      var matches = [];
+      var audioTrackCount = PremiereBridge._collectionCount(sequence.audioTracks, 64);
+      for (var at = 0; at < audioTrackCount; at++) {
+        var track = getTrack(sequence.audioTracks, at);
+        if (!track || !track.clips) {
+          continue;
+        }
+        var count = clipCount(track);
+        for (var ac = 0; ac < count; ac++) {
+          var clip = null;
+          try {
+            clip = track.clips[ac];
+          } catch (errAudioClipGet) {
+          }
+          if (!clip) {
+            continue;
+          }
+          var summary = summarizeClip(clip, "audio", at, ac);
+          if (clipMatchesNestedRange(summary, nestedName, bounds)) {
+            matches.push({
+              clip: clip,
+              summary: summary
+            });
+          }
+        }
+      }
+      return matches;
+    }
+
+    function removeUnexpectedNestedAudio(nestedName, bounds) {
+      var removed = [];
+      var removeErrors = [];
+      var matches = findNestedAudioClips(nestedName, bounds);
+      for (var ai = matches.length - 1; ai >= 0; ai--) {
+        var match = matches[ai];
+        if (!match || !match.clip) {
+          continue;
+        }
+        if (!match.clip.remove) {
+          removeErrors.push({
+            before: match.summary,
+            error: "TrackItem.remove is unavailable"
+          });
+          continue;
+        }
+        var removeMethod = null;
+        try {
+          match.clip.remove(false, false);
+          removeMethod = "trackItem.remove(false, false)";
+        } catch (errAudioRemoveBool) {
+          try {
+            match.clip.remove(0, 0);
+            removeMethod = "trackItem.remove(0, 0)";
+          } catch (errAudioRemoveNumber) {
+            removeErrors.push({
+              before: match.summary,
+              error: "trackItem.remove(false, false): " + String(errAudioRemoveBool) + "; trackItem.remove(0, 0): " + String(errAudioRemoveNumber)
+            });
+          }
+        }
+        if (removeMethod) {
+          removed.push({
+            method: removeMethod,
+            removed: match.summary
+          });
+        }
+      }
+      return {
+        removed: removed,
+        errors: removeErrors
+      };
+    }
+
+    function setProjectItemInOut(projectItem, inTicks, outTicks, mediaType, label) {
+      var result = {
+        ok: false,
+        label: label,
+        mediaType: mediaType,
+        inTicks: String(Math.round(Number(inTicks))),
+        outTicks: String(Math.round(Number(outTicks))),
+        methods: [],
+        errors: []
+      };
+      if (!projectItem) {
+        result.errors.push("projectItem unavailable");
+        return result;
+      }
+      if (!projectItem.setInPoint || !projectItem.setOutPoint) {
+        result.errors.push("ProjectItem.setInPoint/setOutPoint unavailable");
+        return result;
+      }
+      var inOk = false;
+      var outOk = false;
+      try {
+        projectItem.setInPoint(result.inTicks, mediaType);
+        inOk = true;
+        result.methods.push("projectItem.setInPoint(ticks," + String(mediaType) + ")");
+      } catch (errSetProjectIn) {
+        result.errors.push("projectItem.setInPoint: " + String(errSetProjectIn));
+      }
+      try {
+        projectItem.setOutPoint(result.outTicks, mediaType);
+        outOk = true;
+        result.methods.push("projectItem.setOutPoint(ticks," + String(mediaType) + ")");
+      } catch (errSetProjectOut) {
+        result.errors.push("projectItem.setOutPoint: " + String(errSetProjectOut));
+      }
+      result.ok = inOk && outOk;
+      return result;
+    }
+
+    function summarizeSequenceInfo(seqInfo) {
+      if (!seqInfo) {
+        return null;
+      }
+      return {
+        index: seqInfo.index,
+        name: seqInfo.name,
+        id: seqInfo.id,
+        binPath: seqInfo.binPath || "",
+        active: !!seqInfo.active
+      };
+    }
+
+    function selectedItemDetail(item) {
+      return {
+        kind: item.kind,
+        trackIndex: item.trackIndex,
+        track: trackLabel(item.kind, item.trackIndex),
+        clipIndex: item.clipIndex,
+        name: item.name,
+        start: summarizeTicks(item.startTicks),
+        end: summarizeTicks(item.endTicks)
+      };
+    }
+
+    var selectedItems = PremiereBridge._selectedTrackItems(sequence);
+    if (!selectedItems.length) {
+      return PremiereBridge._err("No selected track items found");
+    }
+    var bounds = PremiereBridge._selectionBounds(selectedItems);
+    if (!bounds) {
+      return PremiereBridge._err("Unable to compute selection bounds", {
+        selectionCount: selectedItems.length,
+        selectionSample: selectedItems.slice(0, 12)
+      });
+    }
+
+    var requestedName = payload.name !== undefined && payload.name !== null ? String(payload.name) : null;
+    if (requestedName !== null && !requestedName.replace(/^\s+|\s+$/g, "")) {
+      return PremiereBridge._err("name must be a non-empty string");
+    }
+    var ignoreTrackTargeting = boolish(payload.ignoreTrackTargeting, true);
+    var videoTrackIndex = toIntegerOrNull(payload.videoTrackIndex);
+    if (payload.videoTrackIndex !== undefined && videoTrackIndex === null) {
+      return PremiereBridge._err("Invalid videoTrackIndex");
+    }
+
+    var primaryVideoTrack = null;
+    var selectedAudioCount = 0;
+    for (var s = 0; s < selectedItems.length; s++) {
+      if (selectedItems[s].kind === "video") {
+        if (primaryVideoTrack === null || selectedItems[s].trackIndex < primaryVideoTrack) {
+          primaryVideoTrack = selectedItems[s].trackIndex;
+        }
+      } else if (selectedItems[s].kind === "audio") {
+        selectedAudioCount++;
+      }
+    }
+    if (primaryVideoTrack === null) {
+      return PremiereBridge._err("At least one selected video track item is required; parent audio-only nesting is not supported by this command");
+    }
+    var parentAudioMode = selectedAudioCount > 0 ? "preserve-original-parent-clips" : "none";
+    if (videoTrackIndex === null) {
+      videoTrackIndex = primaryVideoTrack;
+    }
+
+    var videoTrack = getTrack(sequence.videoTracks, videoTrackIndex);
+    if (!videoTrack) {
+      return PremiereBridge._err("Video track not found", { videoTrackIndex: videoTrackIndex });
+    }
+    var beforeList = PremiereBridge._sequenceList();
+    PremiereBridge._collectSequenceBinPaths(beforeList);
+    var beforeSnapshot = snapshotTracks(selectedItems, bounds, videoTrackIndex, null);
+    var selectedBeforeClips = flattenSelectedSnapshot(beforeSnapshot);
+    var selectedVideoBeforeClips = filterClipsByKind(selectedBeforeClips, "video");
+    var selectedAudioBeforeClips = filterClipsByKind(selectedBeforeClips, "audio");
+    var selectionDetails = [];
+    for (var detailIndex = 0; detailIndex < selectedItems.length; detailIndex++) {
+      selectionDetails.push(selectedItemDetail(selectedItems[detailIndex]));
+    }
+    var activeBefore = {
+      name: sequence.name ? String(sequence.name) : null,
+      id: sequence.sequenceID !== undefined && sequence.sequenceID !== null ? String(sequence.sequenceID) : null
+    };
+
+    var criteria = {
+      name: requestedName,
+      ignoreTrackTargeting: ignoreTrackTargeting,
+      videoTrackIndex: videoTrackIndex,
+      parentAudioMode: parentAudioMode,
+      selectedAudioCount: selectedAudioCount,
+      audioPreservedInNestedSequence: selectedAudioCount > 0,
+      parentAudioPreserved: selectedAudioCount > 0,
+      selectionCount: selectedItems.length,
+      bounds: {
+        "in": summarizeTicks(bounds.inTicks),
+        "out": summarizeTicks(bounds.outTicks),
+        duration: summarizeTicks(Math.max(0, bounds.outTicks - bounds.inTicks))
+      }
+    };
+
+    if (payload.dryRun === true) {
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        supported: true,
+        criteria: criteria,
+        selection: selectionDetails,
+        tracks: {
+          before: beforeSnapshot
+        },
+        selectedBeforeClips: selectedBeforeClips,
+        selectedVideoBeforeClips: selectedVideoBeforeClips,
+        selectedAudioBeforeClips: selectedAudioBeforeClips,
+        available: {
+          createSubsequence: !!sequence.createSubsequence,
+          sequenceOverwriteClip: !!sequence.overwriteClip,
+          videoTrackOverwriteClip: !!(videoTrack && videoTrack.overwriteClip),
+          willInsertParentAudio: false
+        }
+      });
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var originalInOut = PremiereBridge._readSequenceInOutTicks(sequence, qeSeq);
+    var methods = [];
+    var errors = [];
+    var setInOutResult = PremiereBridge._setInOutTicks(sequence, qeSeq, bounds.inTicks, bounds.outTicks);
+    methods.push("setInOut:" + setInOutResult.methods.join("+"));
+
+    var createdRaw = null;
+    var createdRef = null;
+    try {
+      createdRaw = sequence.createSubsequence(ignoreTrackTargeting);
+      createdRef = createdRaw;
+      methods.push("sequence.createSubsequence(ignoreTrackTargeting)");
+    } catch (errCreateBool) {
+      errors.push("sequence.createSubsequence(bool): " + String(errCreateBool));
+    }
+    if (!createdRef) {
+      try {
+        createdRaw = sequence.createSubsequence();
+        createdRef = createdRaw;
+        methods.push("sequence.createSubsequence()");
+      } catch (errCreateNoArgs) {
+        errors.push("sequence.createSubsequence(): " + String(errCreateNoArgs));
+      }
+    }
+
+    var afterCreateList = PremiereBridge._sequenceList();
+    PremiereBridge._collectSequenceBinPaths(afterCreateList);
+    var newSequences = PremiereBridge._diffNewSequences(beforeList, afterCreateList);
+    var nestedInfo = newSequences && newSequences.length ? newSequences[0] : null;
+    if (!nestedInfo && createdRef) {
+      try {
+        if (createdRef.projectItem) {
+          nestedInfo = { name: createdRef.name ? String(createdRef.name) : null, id: createdRef.sequenceID ? String(createdRef.sequenceID) : null, ref: createdRef, projectItemRef: createdRef.projectItem };
+        }
+      } catch (errCreatedRef) {
+      }
+    }
+    if (!nestedInfo || !nestedInfo.ref || !nestedInfo.projectItemRef) {
+      if (originalInOut && originalInOut.ok) {
+        PremiereBridge._setInOutTicks(sequence, qeSeq, originalInOut.inTicks, originalInOut.outTicks);
+      }
+      return PremiereBridge._err("Created subsequence but could not resolve the nested sequence project item", {
+        criteria: criteria,
+        newSequences: newSequences,
+        createResult: createdRaw !== null && createdRaw !== undefined ? String(createdRaw) : null,
+        errors: errors
+      });
+    }
+
+    if (requestedName !== null) {
+      try {
+        if (nestedInfo.ref && nestedInfo.ref.name !== undefined) {
+          nestedInfo.ref.name = requestedName;
+        }
+      } catch (errRenameSeq) {
+        errors.push("nestedSequence.name: " + String(errRenameSeq));
+      }
+      try {
+        if (nestedInfo.projectItemRef && nestedInfo.projectItemRef.name !== undefined) {
+          nestedInfo.projectItemRef.name = requestedName;
+        }
+      } catch (errRenameProjectItem) {
+        errors.push("nestedSequence.projectItem.name: " + String(errRenameProjectItem));
+      }
+      nestedInfo.name = requestedName;
+    }
+
+    var activateErrors = [];
+    var activateMethod = PremiereBridge._activateSequence(sequence, qeSeq, project, activateErrors);
+    if (activateMethod) {
+      methods.push("activateOriginal:" + activateMethod);
+    }
+    for (var ae = 0; ae < activateErrors.length; ae++) {
+      errors.push(activateErrors[ae]);
+    }
+
+    var removeOriginals = removeOriginalClips(selectedVideoBeforeClips);
+    if (removeOriginals.removed && removeOriginals.removed.length) {
+      methods.push("removeOriginals:trackItem.remove(false,false)");
+    }
+    for (var re = 0; re < removeOriginals.errors.length; re++) {
+      errors.push("removeOriginals: " + removeOriginals.errors[re].error);
+    }
+
+    var overwriteMethod = null;
+    var targetTicksString = String(bounds.inTicks);
+    var overwriteVideo = false;
+    if (!overwriteMethod) {
+      try {
+        if (videoTrack && videoTrack.overwriteClip) {
+          setProjectItemInOut(nestedInfo.projectItemRef, 0, Math.max(0, bounds.outTicks - bounds.inTicks), 1, "video");
+          setProjectItemInOut(nestedInfo.projectItemRef, 0, 0, 2, "suppress-audio");
+          videoTrack.overwriteClip(nestedInfo.projectItemRef, targetTicksString);
+          overwriteVideo = true;
+          setProjectItemInOut(nestedInfo.projectItemRef, 0, Math.max(0, bounds.outTicks - bounds.inTicks), 4, "restore-all-media");
+        }
+      } catch (errTrackOverwrite) {
+        errors.push("videoTrack.overwriteClip: " + String(errTrackOverwrite));
+      }
+    }
+    if (!overwriteMethod && overwriteVideo) {
+      overwriteMethod = "videoTrack.overwriteClip(projectItem, ticks)";
+    }
+
+    var unexpectedAudio = {
+      removed: [],
+      errors: []
+    };
+    unexpectedAudio = removeUnexpectedNestedAudio(nestedInfo.name, bounds);
+    if (unexpectedAudio.removed && unexpectedAudio.removed.length) {
+      methods.push("removeUnexpectedAudio:trackItem.remove(false,false)");
+    }
+    for (var ue = 0; ue < unexpectedAudio.errors.length; ue++) {
+      errors.push("removeUnexpectedAudio: " + unexpectedAudio.errors[ue].error);
+    }
+
+    if (originalInOut && originalInOut.ok) {
+      PremiereBridge._setInOutTicks(sequence, qeSeq, originalInOut.inTicks, originalInOut.outTicks);
+    }
+
+    var afterSnapshot = snapshotTracks(selectedItems, bounds, videoTrackIndex, null);
+    var observedChange = snapshotChanged(beforeSnapshot, afterSnapshot);
+    var remainingOriginals = remainingOriginalClips(selectedVideoBeforeClips);
+    var remainingPreservedParentAudio = remainingOriginalClips(selectedAudioBeforeClips);
+    var missingPreservedParentAudio = [];
+    for (var mpa = 0; mpa < selectedAudioBeforeClips.length; mpa++) {
+      var expectedAudio = selectedAudioBeforeClips[mpa];
+      var foundAudio = false;
+      for (var rpa = 0; rpa < remainingPreservedParentAudio.length; rpa++) {
+        if (
+          remainingPreservedParentAudio[rpa] &&
+          expectedAudio &&
+          String(remainingPreservedParentAudio[rpa].nodeId || "") === String(expectedAudio.nodeId || "")
+        ) {
+          foundAudio = true;
+          break;
+        }
+      }
+      if (!foundAudio) {
+        missingPreservedParentAudio.push(expectedAudio);
+      }
+    }
+    var remainingUnexpectedAudio = findNestedAudioClips(nestedInfo.name, bounds);
+    var remainingUnexpectedAudioSummaries = [];
+    for (var rua = 0; rua < remainingUnexpectedAudio.length; rua++) {
+      remainingUnexpectedAudioSummaries.push(remainingUnexpectedAudio[rua].summary);
+    }
+    var replacementClip = null;
+    if (afterSnapshot && afterSnapshot.video) {
+      for (var vt = 0; vt < afterSnapshot.video.length; vt++) {
+        var trackSnap = afterSnapshot.video[vt];
+        for (var vc = 0; trackSnap && trackSnap.clips && vc < trackSnap.clips.length; vc++) {
+          var snapClip = trackSnap.clips[vc];
+          if (
+            snapClip &&
+            snapClip.start &&
+            snapClip.start.ticks !== null &&
+            Number(snapClip.start.ticks) === Math.round(Number(bounds.inTicks)) &&
+            snapClip.name &&
+            nestedInfo.name &&
+            String(snapClip.name) === String(nestedInfo.name)
+          ) {
+            replacementClip = snapClip;
+          }
+        }
+      }
+    }
+
+    if (!overwriteMethod || !observedChange || !replacementClip || remainingOriginals.length || remainingUnexpectedAudioSummaries.length || missingPreservedParentAudio.length) {
+      return PremiereBridge._err("Nested sequence was created but the original timeline replacement did not verify", {
+        criteria: criteria,
+        nestedSequence: summarizeSequenceInfo(nestedInfo),
+        overwrite: {
+          method: overwriteMethod,
+          observedChange: observedChange,
+          replacementClip: replacementClip,
+          remainingOriginals: remainingOriginals,
+          remainingUnexpectedAudio: remainingUnexpectedAudioSummaries,
+          missingPreservedParentAudio: missingPreservedParentAudio
+        },
+        removeOriginals: removeOriginals,
+        preservedParentAudio: remainingPreservedParentAudio,
+        unexpectedAudio: unexpectedAudio,
+        tracks: {
+          before: beforeSnapshot,
+          after: afterSnapshot
+        },
+        methods: methods,
+        errors: errors
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteria,
+      nestedSequence: summarizeSequenceInfo(nestedInfo),
+      replacementClip: replacementClip,
+      selection: selectionDetails,
+      tracks: {
+        before: beforeSnapshot,
+        after: afterSnapshot
+      },
+      overwrite: {
+        method: overwriteMethod,
+        observedChange: observedChange,
+        remainingOriginals: remainingOriginals,
+        remainingUnexpectedAudio: remainingUnexpectedAudioSummaries,
+        missingPreservedParentAudio: missingPreservedParentAudio
+      },
+      removeOriginals: removeOriginals,
+      preservedParentAudio: remainingPreservedParentAudio,
+      unexpectedAudio: unexpectedAudio,
+      activeBefore: activeBefore,
+      methods: methods,
+      errors: errors
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.setTrackState = function (jsonStr) {
   try {
     var payload = PremiereBridge._parse(jsonStr) || {};

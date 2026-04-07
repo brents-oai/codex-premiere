@@ -8,6 +8,7 @@
   const stopBtn = document.getElementById("stopBtn");
   const regenBtn = document.getElementById("regenBtn");
   const pingBtn = document.getElementById("pingBtn");
+  const reloadPanelBtn = document.getElementById("reloadPanelBtn");
   const reloadBtn = document.getElementById("reloadBtn");
   const moduleToggles = Array.prototype.slice.call(document.querySelectorAll("[data-module] .module-toggle"));
 
@@ -24,6 +25,7 @@
   let path;
   let os;
   let crypto;
+  let url;
 
   const DEFAULT_PORT = 17321;
   const MAX_LOG_LINES = 400;
@@ -166,7 +168,66 @@
     path = require("path");
     os = require("os");
     crypto = require("crypto");
+    url = require("url");
     return true;
+  }
+
+  function cepSystemPathToFsPath(systemPath) {
+    const raw = String(systemPath || "");
+    if (!raw) {
+      return raw;
+    }
+    if (/^file:/i.test(raw)) {
+      try {
+        return url.fileURLToPath(raw);
+      } catch (errUrl) {
+        return decodeURI(raw).replace(/^file:\/+/, "/");
+      }
+    }
+    return raw;
+  }
+
+  function evalRawExtendScript(script, timeoutMs) {
+    return new Promise((resolve) => {
+      if (!cep || !cep.evalScript) {
+        resolve({ ok: false, error: "CEP evalScript unavailable" });
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve({ ok: false, error: `CEP evalScript timed out after ${timeoutMs}ms` });
+      }, timeoutMs || 5000);
+      cep.evalScript(script, (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve({ ok: true, raw: result });
+      });
+    });
+  }
+
+  async function loadHostScript() {
+    if (!cep || !cep.getSystemPath) {
+      return { ok: false, error: "CEP getSystemPath unavailable" };
+    }
+    const extensionRoot = cepSystemPathToFsPath(cep.getSystemPath("extension"));
+    const hostScriptPath = path.join(extensionRoot, "jsx", "premiere-bridge.jsx");
+    const source = fs.readFileSync(hostScriptPath, "utf8");
+    const script = `${source}\n;\"OK\";`;
+    const result = await evalRawExtendScript(script, 5000);
+    if (!result.ok) {
+      return result;
+    }
+    if (String(result.raw || "") === "OK") {
+      return { ok: true, path: hostScriptPath };
+    }
+    return { ok: false, error: result.raw || "Empty response from host script load", path: hostScriptPath };
   }
 
   function configDir() {
@@ -608,6 +669,7 @@
 
   const MUTATING_COMMANDS = new Set([
     "reloadProject",
+    "reloadPanel",
     "saveProject",
     "exportSequenceDirect",
     "exportSequenceAudio",
@@ -619,6 +681,7 @@
     "renameClipInstances",
     "setClipState",
     "setClipSpeedDuration",
+    "nestSelectedClips",
     "addMarkers",
     "addMarkersFromFile",
     "updateMarker",
@@ -650,6 +713,20 @@
     const { dryRun, cleanPayload } = splitDryRunPayload(payload);
     if (command === "ping") {
       return { ok: true, data: { status: "ok" } };
+    }
+    if (command === "reloadPanel") {
+      if (dryRun) {
+        return { ok: true, data: { dryRun: true, skipped: true, command: command } };
+      }
+      var delayMs = 150;
+      setTimeout(function () {
+        log("Reloading panel");
+        closeServerForPanelReload();
+        setTimeout(function () {
+          location.reload();
+        }, 50);
+      }, delayMs);
+      return { ok: true, data: { reloading: true, delayMs: delayMs } };
     }
     if (command === "addMarkers") {
       const markers = cleanPayload.markers;
@@ -971,6 +1048,12 @@
       }
       return evalExtendScript("setClipSpeedDuration", cleanPayload);
     }
+    if (command === "nestSelectedClips") {
+      if (dryRun) {
+        return evalExtendScript("nestSelectedClips", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("nestSelectedClips", cleanPayload);
+    }
     if (command === "setInPoint") {
       if (dryRun) {
         return evalExtendScript("setInPoint", Object.assign({}, cleanPayload, { dryRun: true }));
@@ -1066,6 +1149,29 @@
       clearTimeout(retryTimer);
       retryTimer = null;
     }
+  }
+
+  function clearHealthTimer() {
+    if (healthTimer) {
+      clearInterval(healthTimer);
+      healthTimer = null;
+    }
+  }
+
+  function closeServerForPanelReload() {
+    desiredRunning = false;
+    clearRetryTimer();
+    clearHealthTimer();
+    if (server) {
+      try {
+        server.close();
+      } catch (errClose) {
+        log(`Server close before panel reload failed: ${errClose.message}`);
+      }
+      server = null;
+    }
+    restarting = false;
+    setStatus(false);
   }
 
   function scheduleRestart(reason) {
@@ -1222,7 +1328,7 @@
     }
   }
 
-  function init() {
+  async function init() {
     applyThemeFromHost();
     setupModules();
     if (csInterface && themeChangeEvent && csInterface.addEventListener) {
@@ -1240,6 +1346,14 @@
     config = loadConfig();
     updateFields();
     setStatus(false);
+
+    const hostLoadResult = await loadHostScript();
+    if (hostLoadResult.ok) {
+      log(`Host script loaded: ${hostLoadResult.path}`);
+    } else {
+      log(`Host script load failed: ${hostLoadResult.error || "unknown"}`);
+    }
+
     startServer();
 
     startBtn.addEventListener("click", startServer);
@@ -1258,11 +1372,17 @@
       const result = await handleCommand("ping", {});
       log(`Ping: ${JSON.stringify(result)}`);
     });
+    reloadPanelBtn.addEventListener("click", async () => {
+      const result = await handleCommand("reloadPanel", {});
+      log(`Reload panel: ${JSON.stringify(result)}`);
+    });
     reloadBtn.addEventListener("click", async () => {
       const result = await handleCommand("reloadProject", {});
       log(`Reload: ${JSON.stringify(result)}`);
     });
   }
 
-  init();
+  init().catch(function (err) {
+    log(`Init error: ${err && err.message ? err.message : String(err)}`);
+  });
 })();

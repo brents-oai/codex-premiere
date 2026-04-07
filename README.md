@@ -42,8 +42,11 @@ The CLI reads the shared config file above for the port, token, and preferred tr
 
 On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI and prefers it when `getPlayerPosition()` is stale.
 
+`reload-panel` reloads the CEP panel HTML/JS and re-evaluates the host JSX at panel startup. Use it after editing `premiere-bridge/js/panel.js`, `premiere-bridge/jsx/premiere-bridge.jsx`, or panel UI assets. The first adoption of this workflow still requires one manual panel close/reopen so the currently running old panel can load the new `reload-panel` command. `reload-project` is different: it reloads the active Premiere project.
+
 ```bash
 ./cli/premiere-bridge.js ping
+./cli/premiere-bridge.js reload-panel --transport cep
 ./cli/premiere-bridge.js reload-project
 ./cli/premiere-bridge.js save-project
 ./cli/premiere-bridge.js export-sequence-direct --transport cep --output-dir /ABS/PATH --filename active-sequence.wav --preset /ABS/PATH/audio-48k.epr
@@ -59,6 +62,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
+./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
@@ -142,9 +146,19 @@ Color indices:
 - Apply the update to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 - The command is CEP-only and uses QE `setSpeed(...)` when present, then verifies the result via the DOM `TrackItem.getSpeed()` and visible duration readback.
 
+`nest-selected-clips` flags:
+- Nest the active timeline selection by creating a sequence from the selected range and replacing that range with one nested sequence clip in the original timeline.
+- Provide an optional nested sequence name with `--name`.
+- Override the replacement video destination with `--video-track-index`; by default the bridge uses the lowest selected video track.
+- Video-only selections produce a video-only nested timeline clip, matching Premiere's Nest UI behavior.
+- Mixed video/audio selections preserve the original selected parent audio clips in place while replacing the selected video clips with one nested video sequence clip. The created nested sequence also contains the selected audio, but the parent timeline keeps the original audio because Premiere's scripting APIs do not safely reproduce the UI Nest audio layout on this host.
+- Set `--ignore-track-targeting true|false` to pass Premiere's subsequence creation option through explicitly.
+- This command is CEP-only. It is not a plain subsequence export; if the original timeline replacement is not observed, the bridge returns an error instead of reporting a successful nest.
+
 ## Commands
 
 - `ping`
+- `reload-panel` (CEP only; reload the panel HTML/JS and re-evaluate host JSX)
 - `reload-project`
 - `save-project`
 - `export-sequence-direct` (CEP only; requires `--preset` plus either `--output` or `--output-dir` + `--filename`)
@@ -159,6 +173,7 @@ Color indices:
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
+- `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`

@@ -12,6 +12,7 @@ function usage(exitCode) {
   const text = `
 Usage:
   premiere-bridge ping [--port N] [--token TOKEN]
+  premiere-bridge reload-panel [--port N] [--token TOKEN]
   premiere-bridge reload-project [--port N] [--token TOKEN]
   premiere-bridge save-project [--port N] [--token TOKEN]
   premiere-bridge export-sequence-direct [--transport cep|auto] (--output /abs/path.ext | --output-dir /abs/dir --filename name.ext) --preset /abs/path.epr [--port N] [--token TOKEN]
@@ -26,6 +27,7 @@ Usage:
   premiere-bridge rename-clip-instances --name NAME [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-state --enabled true|false [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-speed-duration (--speed N | --speed-percent N | --duration-seconds S | --duration-ticks N) [--ripple true|false] [--reverse true|false] [--preserve-audio-pitch true|false] [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge nest-selected-clips [--name NAME] [--video-track-index N] [--ignore-track-targeting true|false] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
   premiere-bridge menu-command-id (--name NAME | --names '["Extract","Ripple Delete"]') [--port N] [--token TOKEN]
   premiere-bridge sequence-info [--port N] [--token TOKEN]
@@ -60,6 +62,7 @@ Global:
 
 Notes:
   get-playhead auto-verifies the visible Premiere timecode on macOS and prefers it when the bridge read is stale.
+  reload-panel reloads the CEP panel HTML/JS and re-evaluates the host JSX during panel startup; reload-project reloads the Premiere project.
   export-sequence-direct is currently CEP-only and requires --preset plus either --output or --output-dir with --filename.
   export-sequences-direct is currently CEP-only and requires --preset plus explicit sequence JSON. Use item outputPath values or --output-dir with per-item filename / --filename-extension for derived filenames.
   export-markers is currently CEP-only and requires an explicit output path or output-dir/filename. Format may be inferred from .json/.csv or set via --format.
@@ -68,6 +71,7 @@ Notes:
   rename-clip-instances is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch renames.
   set-clip-state is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch changes.
   set-clip-speed-duration is currently CEP-only and uses the unsupported QE speed API when available, with DOM readback verification.
+  nest-selected-clips is currently CEP-only and replaces the selected video range with one nested sequence clip. Selected parent audio clips are preserved in place.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
   update-marker is currently CEP-only. Prefer --match-timecode / --match-frame for deterministic frame-level selection.
   delete-markers is currently CEP-only. Range deletion matches marker start times inclusively between the in/out bounds.
@@ -1579,6 +1583,37 @@ function readSetClipSpeedDurationPayload(args) {
   return payload;
 }
 
+function readNestSelectedClipsPayload(args) {
+  const payload = {};
+
+  if (args.name !== undefined) {
+    const name = String(args.name);
+    if (!name.trim()) {
+      throw new Error("--name must be a non-empty string");
+    }
+    payload.name = name;
+  }
+  if (args["video-track-index"] !== undefined) {
+    const videoTrackIndex = Number(args["video-track-index"]);
+    if (!Number.isInteger(videoTrackIndex) || videoTrackIndex < 0) {
+      throw new Error("--video-track-index must be a non-negative integer");
+    }
+    payload.videoTrackIndex = videoTrackIndex;
+  }
+  if (args["audio-track-index"] !== undefined) {
+    throw new Error("--audio-track-index is not supported for nest-selected-clips; parent audio clips are intentionally omitted");
+  }
+  if (args["ignore-track-targeting"] !== undefined) {
+    const ignoreTrackTargeting = boolOrNull(args["ignore-track-targeting"]);
+    if (ignoreTrackTargeting === null) {
+      throw new Error("--ignore-track-targeting must be true or false");
+    }
+    payload.ignoreTrackTargeting = ignoreTrackTargeting;
+  }
+
+  return payload;
+}
+
 function boolOrNull(value) {
   if (value === undefined || value === null) {
     return null;
@@ -1841,6 +1876,15 @@ async function main() {
     return;
   }
 
+  if (command === "reload-panel") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("reload-panel is currently supported only on CEP. Use --transport cep.");
+    }
+    const result = await sendCommandCep(config, "reloadPanel", attachDryRun({}, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   if (command === "reload-project") {
     const result = await sendCommand(config, "reloadProject", attachDryRun({}, dryRun));
     console.log(JSON.stringify(result, null, 2));
@@ -2092,6 +2136,16 @@ async function main() {
     }
     const payload = readSetClipSpeedDurationPayload(args);
     const result = await sendCommandCep(config, "setClipSpeedDuration", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "nest-selected-clips") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("nest-selected-clips is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readNestSelectedClipsPayload(args);
+    const result = await sendCommandCep(config, "nestSelectedClips", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
