@@ -62,6 +62,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
+./cli/premiere-bridge.js replace-clip-source --transport cep --track V1 --timecode "00;00;10;00" --item-id 123456
 ./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
@@ -146,6 +147,13 @@ Color indices:
 - Apply the update to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 - The command is CEP-only and uses QE `setSpeed(...)` when present, then verifies the result via the DOM `TrackItem.getSpeed()` and visible duration readback.
 
+`replace-clip-source` targeting flags:
+- Replace the media source for one matched timeline clip on the active sequence. Use `find-item` first and pass the replacement project item's `nodeId`/`id` as `--item-id`.
+- Target the timeline clip with `--selected`, `--match-name`, or one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
+- Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame`.
+- The command preserves the matched clip's timeline start, visible duration, and clip-instance name when using the overwrite fallback.
+- The command is CEP-only. It tries host-provided track-item replacement methods first, then falls back to a target-track overwrite. Effects, keyframes, clip state, and custom speed changes are not guaranteed to survive the fallback.
+
 `nest-selected-clips` flags:
 - Nest the active timeline selection by creating a sequence from the selected range and replacing that range with one nested sequence clip in the original timeline.
 - Provide an optional nested sequence name with `--name`.
@@ -173,6 +181,7 @@ Color indices:
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
+- `replace-clip-source` (CEP only; replace one targeted timeline clip's source with a project item)
 - `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
@@ -372,6 +381,35 @@ You can also overwrite at an explicit time instead of the playhead:
   --audio-track-index 1 \
   --timecode "00;00;10;00"
 ```
+
+## Replace Clip Source (CEP)
+
+Replace the source for one matched timeline clip with a different project item. Use `find-item` first and pass the replacement item's `nodeId`/`id` as `--item-id`.
+
+```bash
+./cli/premiere-bridge.js find-item --name "Alt Take" --contains --limit 1
+
+./cli/premiere-bridge.js replace-clip-source \
+  --transport cep \
+  --item-id 123456 \
+  --track V1 \
+  --timecode "00;00;10;00"
+```
+
+Target the timeline clip with `--selected`, `--match-name`, or one time selector (`--timecode`, `--frame`, `--seconds`, or `--ticks`). Prefer `--track V1|A1` plus `--timecode` or `--frame` so the bridge replaces one deterministic track item.
+
+Expected response fields include:
+- `replacementItem.name`, `replacementItem.nodeId`, `replacementItem.mediaPath`
+- `target.before.sourceName`
+- `target.after.sourceName`
+- `target.after.start` / `target.after.end` / `target.after.duration`
+- `replace.method`
+- `replace.verified`
+- `replace.sourceInOut`
+
+Current limitation:
+- `replace-clip-source` is currently supported only on the CEP path. `--transport uxp` returns an explicit CLI error.
+- The fallback implementation uses target-track overwrite. It preserves the matched clip's timeline start, visible duration, and clip-instance name, but effects, keyframes, clip state, and custom speed changes are not guaranteed to survive that fallback.
 
 ## Direct Sequence Export (CEP)
 

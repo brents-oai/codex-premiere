@@ -681,6 +681,7 @@
     "renameClipInstances",
     "setClipState",
     "setClipSpeedDuration",
+    "replaceClipSource",
     "nestSelectedClips",
     "addMarkers",
     "addMarkersFromFile",
@@ -1047,6 +1048,12 @@
         return evalExtendScript("setClipSpeedDuration", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("setClipSpeedDuration", cleanPayload);
+    }
+    if (command === "replaceClipSource") {
+      if (dryRun) {
+        return evalExtendScript("replaceClipSource", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("replaceClipSource", cleanPayload);
     }
     if (command === "nestSelectedClips") {
       if (dryRun) {

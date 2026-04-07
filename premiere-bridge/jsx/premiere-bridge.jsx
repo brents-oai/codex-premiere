@@ -5117,6 +5117,725 @@ PremiereBridge.overwriteClip = function (jsonStr) {
   }
 };
 
+PremiereBridge.replaceClipSource = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var project = app.project;
+    var sequence = project && project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+    if (!project || !project.rootItem) {
+      return PremiereBridge._err("No project root item available");
+    }
+
+    var itemId = payload.itemId !== undefined && payload.itemId !== null ? String(payload.itemId) : null;
+    if (!itemId) {
+      return PremiereBridge._err("Provide itemId");
+    }
+
+    function projectItemNodeId(item) {
+      if (!item) {
+        return null;
+      }
+      try {
+        if (item.nodeId !== undefined && item.nodeId !== null) {
+          return String(item.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (item.id !== undefined && item.id !== null) {
+          return String(item.id);
+        }
+      } catch (errLegacyId) {
+      }
+      return null;
+    }
+
+    function projectItemMediaPath(item) {
+      try {
+        if (item && item.getMediaPath) {
+          var raw = item.getMediaPath();
+          if (raw !== undefined && raw !== null) {
+            return String(raw);
+          }
+        }
+      } catch (errMediaPath) {
+      }
+      return null;
+    }
+
+    function itemSummary(foundItem) {
+      return {
+        requestedId: itemId,
+        nodeId: foundItem ? foundItem.nodeId : null,
+        id: foundItem ? foundItem.id : null,
+        name: foundItem && foundItem.item && foundItem.item.name ? String(foundItem.item.name) : null,
+        type: foundItem ? foundItem.type : null,
+        mediaPath: foundItem ? foundItem.mediaPath : null,
+        binPath: foundItem ? foundItem.binPath : "",
+        fullPath: foundItem ? foundItem.fullPath : null
+      };
+    }
+
+    function matchesItemId(item, requestedId) {
+      var foundId = projectItemNodeId(item);
+      return foundId !== null && String(foundId) === String(requestedId);
+    }
+
+    var found = null;
+    function walkProjectItems(container, binParts) {
+      if (found || !container || !container.children) {
+        return;
+      }
+      var children = container.children;
+      var count = PremiereBridge._collectionCount(children, 4096);
+      for (var i = 0; i < count; i++) {
+        if (found) {
+          return;
+        }
+        var child = null;
+        try {
+          child = children[i];
+        } catch (errChild) {
+        }
+        if (!child) {
+          continue;
+        }
+        var childName = child.name ? String(child.name) : null;
+        var fullPathParts = binParts.slice(0);
+        if (childName) {
+          fullPathParts.push(childName);
+        }
+        if (matchesItemId(child, itemId)) {
+          var childType = null;
+          try {
+            if (child.type !== undefined && child.type !== null) {
+              childType = String(child.type);
+            }
+          } catch (errChildType) {
+          }
+          found = {
+            item: child,
+            nodeId: projectItemNodeId(child),
+            id: null,
+            type: childType,
+            mediaPath: projectItemMediaPath(child),
+            binPath: binParts.length ? binParts.join("/") : "",
+            fullPath: fullPathParts.join("/")
+          };
+          try {
+            if (child.id !== undefined && child.id !== null) {
+              found.id = String(child.id);
+            }
+          } catch (errFoundLegacyId) {
+          }
+          return;
+        }
+        if (child.children) {
+          if (childName) {
+            walkProjectItems(child, binParts.concat([childName]));
+          } else {
+            walkProjectItems(child, binParts);
+          }
+        }
+      }
+    }
+
+    walkProjectItems(project.rootItem, []);
+    if (!found || !found.item) {
+      return PremiereBridge._err("Project item not found", { itemId: itemId });
+    }
+
+    var selectedOnly = payload.selected === true;
+    var matchName = null;
+    if (payload.matchName !== undefined && payload.matchName !== null) {
+      matchName = String(payload.matchName);
+      if (!matchName.replace(/^\s+|\s+$/g, "")) {
+        return PremiereBridge._err("matchName must be a non-empty string");
+      }
+    }
+
+    var trackIndex = null;
+    var kind = payload.kind ? String(payload.kind).toLowerCase() : null;
+    if (payload.track !== undefined && payload.track !== null) {
+      var trackStr = String(payload.track).toUpperCase();
+      if (trackStr.indexOf("V") === 0) {
+        trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "video";
+        }
+      } else if (trackStr.indexOf("A") === 0) {
+        trackIndex = Number(trackStr.slice(1)) - 1;
+        if (!kind) {
+          kind = "audio";
+        }
+      } else {
+        trackIndex = Number(trackStr) - 1;
+      }
+    } else if (payload.trackNumber !== undefined && payload.trackNumber !== null) {
+      trackIndex = Number(payload.trackNumber) - 1;
+    } else if (payload.trackIndex !== undefined && payload.trackIndex !== null) {
+      trackIndex = Number(payload.trackIndex);
+    }
+
+    if (trackIndex !== null) {
+      if (isNaN(trackIndex) || trackIndex < 0 || Math.round(trackIndex) !== trackIndex) {
+        return PremiereBridge._err("Invalid track identifier");
+      }
+      if (!kind) {
+        return PremiereBridge._err("Track selector requires kind. Use --track V1|A1 or provide --kind video|audio.");
+      }
+      trackIndex = Math.round(trackIndex);
+    }
+    if (kind && kind !== "video" && kind !== "audio") {
+      return PremiereBridge._err("Invalid track kind; use video or audio");
+    }
+
+    var hasTimeSelector =
+      payload.timecode !== undefined ||
+      payload.frame !== undefined ||
+      payload.seconds !== undefined ||
+      payload.ticks !== undefined;
+    var qeSeq = PremiereBridge._getQeSequence();
+    var targetTicks = null;
+    if (hasTimeSelector) {
+      targetTicks = PremiereBridge._markerPayloadToTicks({
+        timecode: payload.timecode,
+        frame: payload.frame,
+        timeSeconds: payload.seconds,
+        timeTicks: payload.ticks
+      }, sequence, qeSeq);
+      if (targetTicks === null || isNaN(Number(targetTicks))) {
+        return PremiereBridge._err("Invalid clip time selector");
+      }
+      targetTicks = Math.round(Number(targetTicks));
+    }
+
+    if (!selectedOnly && matchName === null && targetTicks === null) {
+      return PremiereBridge._err("Provide selected, matchName, or one of timecode/frame/seconds/ticks");
+    }
+
+    function getTrack(collection, index) {
+      if (!collection || index < 0) {
+        return null;
+      }
+      try {
+        if (collection[index]) {
+          return collection[index];
+        }
+      } catch (errGetTrack) {
+      }
+      return null;
+    }
+
+    function trackLabel(clipKind, clipTrackIndex) {
+      return (clipKind === "audio" ? "A" : "V") + String(Number(clipTrackIndex) + 1);
+    }
+
+    function clipName(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.name !== undefined && clip.name !== null) {
+          return String(clip.name);
+        }
+      } catch (errClipName) {
+      }
+      try {
+        if (clip.projectItem && clip.projectItem.name !== undefined && clip.projectItem.name !== null) {
+          return String(clip.projectItem.name);
+        }
+      } catch (errProjectItemName) {
+      }
+      return null;
+    }
+
+    function clipProjectItem(clip) {
+      try {
+        if (clip && clip.projectItem) {
+          return clip.projectItem;
+        }
+      } catch (errClipProjectItem) {
+      }
+      return null;
+    }
+
+    function clipNodeId(clip) {
+      if (!clip) {
+        return null;
+      }
+      try {
+        if (clip.nodeId !== undefined && clip.nodeId !== null) {
+          return String(clip.nodeId);
+        }
+      } catch (errClipNodeId) {
+      }
+      try {
+        if (clip.id !== undefined && clip.id !== null) {
+          return String(clip.id);
+        }
+      } catch (errClipLegacyId) {
+      }
+      return null;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function summarizeClip(clip, clipKind, clipTrackIndex, clipIndex) {
+      var projectItemRef = clipProjectItem(clip);
+      var sourceName = null;
+      try {
+        if (projectItemRef && projectItemRef.name !== undefined && projectItemRef.name !== null) {
+          sourceName = String(projectItemRef.name);
+        }
+      } catch (errSourceName) {
+      }
+      var startTicks = PremiereBridge._timeToTicks(clip && clip.start !== undefined ? clip.start : null);
+      var endTicks = PremiereBridge._timeToTicks(clip && clip.end !== undefined ? clip.end : null);
+      var inTicks = PremiereBridge._timeToTicks(clip && clip.inPoint !== undefined ? clip.inPoint : null);
+      var outTicks = PremiereBridge._timeToTicks(clip && clip.outPoint !== undefined ? clip.outPoint : null);
+      var durationTicks = null;
+      if (startTicks !== null && endTicks !== null) {
+        durationTicks = Math.max(0, Math.round(Number(endTicks) - Number(startTicks)));
+      }
+      return {
+        kind: clipKind,
+        trackIndex: clipTrackIndex,
+        track: trackLabel(clipKind, clipTrackIndex),
+        clipIndex: clipIndex,
+        nodeId: clipNodeId(clip),
+        name: clipName(clip),
+        sourceName: sourceName,
+        sourceNodeId: projectItemNodeId(projectItemRef),
+        sourceMediaPath: projectItemMediaPath(projectItemRef),
+        selected: PremiereBridge._clipSelectionState(clip),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        duration: summarizeTicks(durationTicks),
+        source: {
+          inPoint: summarizeTicks(inTicks),
+          outPoint: summarizeTicks(outTicks)
+        }
+      };
+    }
+
+    function criteriaSummary() {
+      return {
+        replacementItemId: itemId,
+        selected: selectedOnly,
+        matchName: matchName,
+        kind: kind,
+        trackIndex: trackIndex,
+        track: trackIndex !== null && kind ? trackLabel(kind, trackIndex) : null,
+        timeTicks: targetTicks !== null ? String(targetTicks) : null,
+        timecode: targetTicks !== null ? PremiereBridge._ticksToTimecode(targetTicks) : null
+      };
+    }
+
+    function sourceMatchesReplacement(summary) {
+      if (!summary) {
+        return false;
+      }
+      if (found.nodeId && summary.sourceNodeId) {
+        return String(summary.sourceNodeId) === String(found.nodeId);
+      }
+      if (found.id && summary.sourceNodeId) {
+        return String(summary.sourceNodeId) === String(found.id);
+      }
+      if (found.item && found.item.name && summary.sourceName) {
+        return String(summary.sourceName) === String(found.item.name);
+      }
+      return false;
+    }
+
+    function startAndDurationMatch(before, after) {
+      if (!before || !after || before.start.ticks === null || after.start.ticks === null) {
+        return false;
+      }
+      if (Number(before.start.ticks) !== Number(after.start.ticks)) {
+        return false;
+      }
+      if (before.duration.ticks === null || after.duration.ticks === null) {
+        return true;
+      }
+      return Math.abs(Number(before.duration.ticks) - Number(after.duration.ticks)) <= 2;
+    }
+
+    var matched = [];
+    var requestedTrackFound = trackIndex === null;
+
+    function collect(kindName, trackCollection) {
+      if (!trackCollection) {
+        return;
+      }
+      if (kind && kind !== kindName) {
+        return;
+      }
+      var trackCount = PremiereBridge._collectionCount(trackCollection, 64);
+      for (var t = 0; t < trackCount; t++) {
+        if (trackIndex !== null && t !== trackIndex) {
+          continue;
+        }
+        var track = null;
+        try {
+          track = trackCollection[t];
+        } catch (errTrackGet) {
+        }
+        if (!track) {
+          continue;
+        }
+        requestedTrackFound = true;
+        if (!track.clips) {
+          continue;
+        }
+        var clipCount = PremiereBridge._collectionCount(track.clips, 512);
+        for (var c = 0; c < clipCount; c++) {
+          var clip = null;
+          try {
+            clip = track.clips[c];
+          } catch (errClipGet) {
+          }
+          if (!clip) {
+            continue;
+          }
+          var summary = summarizeClip(clip, kindName, t, c);
+          if (selectedOnly && !summary.selected) {
+            continue;
+          }
+          if (matchName !== null && summary.name !== matchName && summary.sourceName !== matchName) {
+            continue;
+          }
+          if (targetTicks !== null) {
+            var startTicks = summary.start.ticks !== null ? Number(summary.start.ticks) : null;
+            var endTicks = summary.end.ticks !== null ? Number(summary.end.ticks) : null;
+            if (startTicks === null || endTicks === null) {
+              continue;
+            }
+            if (!(targetTicks >= startTicks && targetTicks < endTicks)) {
+              continue;
+            }
+          }
+          matched.push({
+            clip: clip,
+            kind: kindName,
+            trackIndex: t,
+            clipIndex: c,
+            before: summary
+          });
+        }
+      }
+    }
+
+    collect("video", sequence.videoTracks);
+    collect("audio", sequence.audioTracks);
+
+    if (!requestedTrackFound) {
+      return PremiereBridge._err(kind === "audio" ? "Audio track not found" : "Video track not found", {
+        criteria: criteriaSummary()
+      });
+    }
+
+    if (!matched.length) {
+      return PremiereBridge._err("No clip instances matched the requested selector", {
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found)
+      });
+    }
+
+    if (matched.length > 1) {
+      var ambiguous = [];
+      var ambiguousLimit = Math.min(matched.length, 5);
+      for (var a = 0; a < ambiguousLimit; a++) {
+        ambiguous.push(matched[a].before);
+      }
+      return PremiereBridge._err("Multiple clip instances matched the requested selector. Narrow the selector.", {
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found),
+        matchCount: matched.length,
+        matches: ambiguous
+      });
+    }
+
+    var target = matched[0];
+    if (payload.dryRun === true) {
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found),
+        matchedCount: matched.length,
+        target: target.before,
+        available: {
+          directReplaceWithClip: !!(target.clip && target.clip.replaceWithClip),
+          directReplaceProjectItem: !!(target.clip && target.clip.replaceProjectItem),
+          assignProjectItem: !!(target.clip && target.clip.projectItem !== undefined),
+          trackOverwriteClip: !!(getTrack(target.kind === "audio" ? sequence.audioTracks : sequence.videoTracks, target.trackIndex) || {}).overwriteClip
+        }
+      });
+    }
+
+    if (sourceMatchesReplacement(target.before)) {
+      return PremiereBridge._ok({
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found),
+        matchedCount: matched.length,
+        unchangedCount: 1,
+        changedCount: 0,
+        target: {
+          before: target.before,
+          after: target.before
+        },
+        replace: {
+          method: "noop",
+          verified: true,
+          reason: "Matched clip already uses the requested replacement item"
+        }
+      });
+    }
+
+    if (target.before.start.ticks === null || target.before.duration.ticks === null) {
+      return PremiereBridge._err("Matched clip has no readable timeline start or duration", {
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found),
+        target: target.before
+      });
+    }
+
+    function preserveInstanceName(clip, desiredName) {
+      var result = { requestedName: desiredName || null, applied: false, method: null, error: null };
+      if (!clip || !desiredName) {
+        return result;
+      }
+      try {
+        if (clip.name !== undefined && clip.name !== null && String(clip.name) === String(desiredName)) {
+          result.applied = true;
+          result.method = "noop";
+          return result;
+        }
+      } catch (errNameRead) {
+      }
+      try {
+        clip.name = String(desiredName);
+        result.applied = true;
+        result.method = "clip.name";
+      } catch (errNameWrite) {
+        result.error = String(errNameWrite);
+      }
+      return result;
+    }
+
+    var methodsTried = [];
+    var fallbackErrors = [];
+    var method = null;
+    var replacementClip = target.clip;
+    var after = null;
+
+    function tryDirect(label, fn) {
+      if (method) {
+        return;
+      }
+      try {
+        fn();
+        methodsTried.push(label);
+        var candidate = summarizeClip(target.clip, target.kind, target.trackIndex, target.clipIndex);
+        if (sourceMatchesReplacement(candidate) && startAndDurationMatch(target.before, candidate)) {
+          method = label;
+          after = candidate;
+          replacementClip = target.clip;
+        } else {
+          fallbackErrors.push(label + ": method returned but source replacement did not verify");
+        }
+      } catch (errDirect) {
+        fallbackErrors.push(label + ": " + String(errDirect));
+      }
+    }
+
+    if (target.clip && target.clip.replaceWithClip) {
+      tryDirect("clip.replaceWithClip(projectItem)", function () {
+        target.clip.replaceWithClip(found.item);
+      });
+    }
+    if (target.clip && target.clip.replaceProjectItem) {
+      tryDirect("clip.replaceProjectItem(projectItem)", function () {
+        target.clip.replaceProjectItem(found.item);
+      });
+    }
+    if (target.clip && target.clip.projectItem !== undefined) {
+      tryDirect("clip.projectItem=", function () {
+        target.clip.projectItem = found.item;
+      });
+    }
+
+    function setReplacementProjectItemInOut(sourceInTicks, sourceOutTicks, mediaType) {
+      var result = { ok: false, methods: [], errors: [], inTicks: String(sourceInTicks), outTicks: String(sourceOutTicks), mediaType: mediaType };
+      if (!found.item) {
+        result.errors.push("replacement projectItem unavailable");
+        return result;
+      }
+      if (!found.item.setInPoint || !found.item.setOutPoint) {
+        result.errors.push("replacement projectItem setInPoint/setOutPoint unavailable");
+        return result;
+      }
+      try {
+        found.item.setInPoint(String(sourceInTicks), mediaType);
+        result.methods.push("projectItem.setInPoint(ticks," + String(mediaType) + ")");
+      } catch (errSetIn) {
+        result.errors.push("projectItem.setInPoint: " + String(errSetIn));
+      }
+      try {
+        found.item.setOutPoint(String(sourceOutTicks), mediaType);
+        result.methods.push("projectItem.setOutPoint(ticks," + String(mediaType) + ")");
+      } catch (errSetOut) {
+        result.errors.push("projectItem.setOutPoint: " + String(errSetOut));
+      }
+      result.ok = result.methods.length === 2;
+      return result;
+    }
+
+    function findClipOnTargetTrack() {
+      var track = getTrack(target.kind === "audio" ? sequence.audioTracks : sequence.videoTracks, target.trackIndex);
+      if (!track || !track.clips) {
+        return null;
+      }
+      var count = PremiereBridge._collectionCount(track.clips, 512);
+      var fallback = null;
+      for (var i = 0; i < count; i++) {
+        var clip = null;
+        try {
+          clip = track.clips[i];
+        } catch (errFindClip) {
+        }
+        if (!clip) {
+          continue;
+        }
+        var summary = summarizeClip(clip, target.kind, target.trackIndex, i);
+        if (!startAndDurationMatch(target.before, summary)) {
+          continue;
+        }
+        var candidate = { clip: clip, summary: summary, clipIndex: i };
+        if (sourceMatchesReplacement(summary)) {
+          return candidate;
+        }
+        if (!fallback) {
+          fallback = candidate;
+        }
+      }
+      return fallback;
+    }
+
+    var sourceInTicks = 0;
+    if (target.before.source && target.before.source.inPoint && target.before.source.inPoint.ticks !== null) {
+      sourceInTicks = Math.max(0, Math.round(Number(target.before.source.inPoint.ticks)));
+    }
+    var durationTicks = target.before.duration && target.before.duration.ticks !== null
+      ? Math.round(Number(target.before.duration.ticks))
+      : 0;
+    var sourceOutTicks = Math.max(sourceInTicks, sourceInTicks + Math.max(0, durationTicks));
+    var mediaType = target.kind === "audio" ? 2 : 1;
+    var projectItemInOut = null;
+
+    if (!method) {
+      var targetTrack = getTrack(target.kind === "audio" ? sequence.audioTracks : sequence.videoTracks, target.trackIndex);
+      if (!targetTrack || !targetTrack.overwriteClip) {
+        fallbackErrors.push("targetTrack.overwriteClip unavailable");
+      } else {
+        projectItemInOut = setReplacementProjectItemInOut(sourceInTicks, sourceOutTicks, mediaType);
+        for (var pe = 0; projectItemInOut && pe < projectItemInOut.errors.length; pe++) {
+          fallbackErrors.push(projectItemInOut.errors[pe]);
+        }
+        try {
+          methodsTried.push((target.kind === "audio" ? "audioTrack" : "videoTrack") + ".overwriteClip(projectItem,ticks)");
+          targetTrack.overwriteClip(found.item, String(target.before.start.ticks));
+          var foundReplacement = findClipOnTargetTrack();
+          if (foundReplacement && foundReplacement.summary && sourceMatchesReplacement(foundReplacement.summary) && startAndDurationMatch(target.before, foundReplacement.summary)) {
+            method = (target.kind === "audio" ? "audioTrack" : "videoTrack") + ".overwriteClip(projectItem,ticks)";
+            replacementClip = foundReplacement.clip;
+            after = foundReplacement.summary;
+          } else if (foundReplacement && foundReplacement.summary) {
+            after = foundReplacement.summary;
+            fallbackErrors.push("track overwrite returned but source/start/duration verification failed");
+          } else {
+            fallbackErrors.push("track overwrite returned but no candidate clip was found on the target track");
+          }
+        } catch (errOverwrite) {
+          fallbackErrors.push("targetTrack.overwriteClip: " + String(errOverwrite));
+        }
+      }
+    }
+
+    var namePreservation = { requestedName: target.before.name, applied: false, method: null, error: null };
+    if (method) {
+      namePreservation = preserveInstanceName(replacementClip, target.before.name);
+      after = summarizeClip(replacementClip, target.kind, target.trackIndex, after ? after.clipIndex : target.clipIndex);
+    }
+
+    if (!method || !after || !sourceMatchesReplacement(after) || !startAndDurationMatch(target.before, after)) {
+      return PremiereBridge._err("Failed to replace clip source", {
+        criteria: criteriaSummary(),
+        replacementItem: itemSummary(found),
+        matchedCount: matched.length,
+        target: {
+          before: target.before,
+          after: after
+        },
+        replace: {
+          method: method,
+          methodsTried: methodsTried,
+          verified: false,
+          projectItemInOut: projectItemInOut,
+          sourceInOut: {
+            inPoint: summarizeTicks(sourceInTicks),
+            outPoint: summarizeTicks(sourceOutTicks),
+            mediaType: mediaType
+          },
+          namePreservation: namePreservation,
+          errors: fallbackErrors
+        }
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteriaSummary(),
+      replacementItem: itemSummary(found),
+      matchedCount: matched.length,
+      unchangedCount: 0,
+      changedCount: 1,
+      target: {
+        before: target.before,
+        after: after
+      },
+      replace: {
+        method: method,
+        methodsTried: methodsTried,
+        verified: true,
+        projectItemInOut: projectItemInOut,
+        sourceInOut: {
+          inPoint: summarizeTicks(sourceInTicks),
+          outPoint: summarizeTicks(sourceOutTicks),
+          mediaType: mediaType
+        },
+        namePreservation: namePreservation,
+        fallbackErrors: fallbackErrors
+      }
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge._uniqueSequenceName = function (baseName, existingNames) {
   var base = String(baseName || "Sequence Copy");
   var taken = {};
