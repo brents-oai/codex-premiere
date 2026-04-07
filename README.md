@@ -57,6 +57,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js insert-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
 ./cli/premiere-bridge.js overwrite-clip --transport cep --item-id 123456 --video-track-index 0 --audio-track-index 0 --at playhead
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
+./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
 ./cli/premiere-bridge.js transcript-json --timeout-seconds 45
 ./cli/premiere-bridge.js sequence-info
@@ -124,6 +125,13 @@ Color indices:
 - Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame` when exact frame placement matters.
 - Rename every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 
+`set-clip-state` targeting flags:
+- Enable or disable one or more timeline clip instances on the active sequence without changing the source project item.
+- Set explicit state with `--enabled true|false`.
+- Target clips with `--selected`, `--match-name`, or one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
+- Narrow deterministic matches with `--track V1|A1` and optional `--kind video|audio`; prefer `--track` plus `--timecode` or `--frame` when exact frame placement matters.
+- Apply the state to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
+
 ## Commands
 
 - `ping`
@@ -139,6 +147,7 @@ Color indices:
 - `insert-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
 - `overwrite-clip` (CEP only; requires `--item-id`, `--video-track-index`, `--audio-track-index`, and one of `--at playhead`, `--timecode`, `--seconds`, or `--ticks`)
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
+- `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `menu-command-id`
 - `transcript-json` (requires the UXP panel)
 - `sequence-info`
