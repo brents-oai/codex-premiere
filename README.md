@@ -63,6 +63,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
 ./cli/premiere-bridge.js add-effect --transport cep --name "Roughen Edges" --selected
+./cli/premiere-bridge.js set-effect-param --transport cep --effect "Roughen Edges" --param "Border" --value 12 --selected
 ./cli/premiere-bridge.js set-transition --transport cep --state present --track V1 --timecode "00;00;10;00" --name "Cross Dissolve" --duration-frames 15
 ./cli/premiere-bridge.js replace-clip-source --transport cep --track V1 --timecode "00;00;10;00" --item-id 123456
 ./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
@@ -156,6 +157,15 @@ Color indices:
 - Add the effect to every selected video clip by adding `--all-matches`; otherwise the bridge errors on multi-clip selections and returns a sample of the selected clips.
 - The command is CEP-only. It uses QE `getVideoEffectByName(...)` plus `addVideoEffect(...)`, then verifies the effect through DOM clip component readback.
 
+`set-effect-param` targeting flags:
+- Set one non-keyframed parameter on an existing effect component on the selected timeline video clip.
+- Identify the component with `--effect`, for example `--effect "Roughen Edges"`, and identify the parameter with `--param`, for example `--param "Border"`.
+- Set the parameter with `--value`. By default values are auto-parsed as numbers, booleans, or strings; override parsing with `--value-type number|boolean|string|json`.
+- Target the current timeline selection with `--selected`. If exactly one video clip is selected, `--selected` is assumed.
+- Disambiguate duplicate effect components with `--component-index N`; otherwise the bridge errors when more than one matching component is present.
+- Dry-run the command first to verify the matched clip/component/parameter without changing Premiere.
+- The command is CEP-only. It calls the DOM `ComponentParam.setValue(...)` method and verifies the write through component-parameter readback.
+
 `set-transition` edit-point flags:
 - Set explicit transition state at a clip edge with `--state present` or `--state absent`.
 - Target one edit point with `--track V1|A1` plus exactly one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
@@ -200,6 +210,7 @@ Color indices:
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
 - `add-effect` (CEP only; add a named video effect to the selected timeline clip)
+- `set-effect-param` (CEP only; set one parameter on an existing effect component on the selected timeline clip)
 - `set-transition` (CEP only; set a transition present or absent at one track edit point)
 - `replace-clip-source` (CEP only; replace one targeted timeline clip's source with a project item)
 - `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)

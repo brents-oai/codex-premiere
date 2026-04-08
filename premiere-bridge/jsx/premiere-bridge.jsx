@@ -8486,6 +8486,594 @@ PremiereBridge.addEffect = function (jsonStr) {
   }
 };
 
+PremiereBridge.setEffectParam = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var effectName = payload.effect !== undefined && payload.effect !== null ? String(payload.effect) : "";
+    var paramName = payload.param !== undefined && payload.param !== null ? String(payload.param) : "";
+    if (!effectName.replace(/^\s+|\s+$/g, "")) {
+      return PremiereBridge._err("Provide effect name");
+    }
+    if (!paramName.replace(/^\s+|\s+$/g, "")) {
+      return PremiereBridge._err("Provide parameter name");
+    }
+
+    var selectedOnly = payload.selected !== false;
+    if (!selectedOnly) {
+      return PremiereBridge._err("setEffectParam currently targets selected video clips only");
+    }
+    var allMatches = payload.allMatches === true;
+    var componentIndex = payload.componentIndex !== undefined && payload.componentIndex !== null
+      ? Number(payload.componentIndex)
+      : null;
+    if (componentIndex !== null && (isNaN(componentIndex) || componentIndex < 0 || Math.round(componentIndex) !== componentIndex)) {
+      return PremiereBridge._err("componentIndex must be a non-negative integer");
+    }
+
+    function trackLabel(trackIndex) {
+      return "V" + String(Number(trackIndex) + 1);
+    }
+
+    function timeValueToTicks(value) {
+      var ticks = PremiereBridge._timeToTicks(value);
+      if (ticks !== null && ticks !== undefined && !isNaN(Number(ticks))) {
+        return Math.round(Number(ticks));
+      }
+      return null;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function safeName(obj) {
+      if (!obj) {
+        return null;
+      }
+      try {
+        if (obj.displayName !== undefined && obj.displayName !== null) {
+          return String(obj.displayName);
+        }
+      } catch (errDisplayName) {
+      }
+      try {
+        if (obj.name !== undefined && obj.name !== null) {
+          return String(obj.name);
+        }
+      } catch (errName) {
+      }
+      try {
+        if (obj.matchName !== undefined && obj.matchName !== null) {
+          return String(obj.matchName);
+        }
+      } catch (errMatchName) {
+      }
+      return null;
+    }
+
+    function safeMatchName(obj) {
+      try {
+        if (obj && obj.matchName !== undefined && obj.matchName !== null) {
+          return String(obj.matchName);
+        }
+      } catch (errMatchName) {
+      }
+      return null;
+    }
+
+    function itemNodeId(item) {
+      if (!item) {
+        return null;
+      }
+      try {
+        if (item.nodeId !== undefined && item.nodeId !== null) {
+          return String(item.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (item.id !== undefined && item.id !== null) {
+          return String(item.id);
+        }
+      } catch (errId) {
+      }
+      return null;
+    }
+
+    function normalizeName(name) {
+      return String(name || "").toLowerCase().replace(/\s+/g, "");
+    }
+
+    function valuesEqual(a, b) {
+      try {
+        return JSON.stringify(a) === JSON.stringify(b);
+      } catch (errJsonCompare) {
+      }
+      return String(a) === String(b);
+    }
+
+    function summarizeValue(value) {
+      if (value === null || value === undefined) {
+        return { value: value, type: value === null ? "null" : "undefined", text: String(value) };
+      }
+      if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
+        return { value: value, type: typeof value, text: String(value) };
+      }
+      try {
+        if (value instanceof Array) {
+          var arr = [];
+          for (var i = 0; i < value.length; i++) {
+            arr.push(value[i]);
+          }
+          return { value: arr, type: "array", text: JSON.stringify(arr) };
+        }
+      } catch (errArrayValue) {
+      }
+      try {
+        if (value.seconds !== undefined && value.ticks !== undefined) {
+          return {
+            value: {
+              seconds: Number(value.seconds),
+              ticks: String(value.ticks)
+            },
+            type: "time",
+            text: String(value.seconds) + "s"
+          };
+        }
+      } catch (errTimeValue) {
+      }
+      try {
+        return { value: String(value), type: "object", text: String(value) };
+      } catch (errValueString) {
+      }
+      return { value: null, type: "unreadable", text: null };
+    }
+
+    function getParamValue(param) {
+      try {
+        if (param && param.getValue) {
+          return { ok: true, value: param.getValue(), method: "getValue()" };
+        }
+      } catch (errGetValue) {
+        return { ok: false, value: null, method: "getValue()", error: String(errGetValue) };
+      }
+      try {
+        if (param && param.value !== undefined) {
+          return { ok: true, value: param.value, method: "value" };
+        }
+      } catch (errValue) {
+        return { ok: false, value: null, method: "value", error: String(errValue) };
+      }
+      return { ok: false, value: null, method: null, error: "No readable value API" };
+    }
+
+    function setParamValue(param, value) {
+      if (!param || !param.setValue) {
+        return { ok: false, method: null, error: "ComponentParam.setValue unavailable" };
+      }
+      try {
+        param.setValue(value, true);
+        return { ok: true, method: "setValue(value, true)" };
+      } catch (errSetValue) {
+        return { ok: false, method: "setValue(value, true)", error: String(errSetValue) };
+      }
+    }
+
+    function summarizeParam(param, paramIndex) {
+      var valueResult = getParamValue(param);
+      var valueSummary = valueResult.ok ? summarizeValue(valueResult.value) : { value: null, type: null, text: null };
+      return {
+        index: paramIndex,
+        name: safeName(param),
+        matchName: safeMatchName(param),
+        value: valueSummary.value,
+        valueType: valueSummary.type,
+        valueText: valueSummary.text,
+        valueMethod: valueResult.method,
+        valueError: valueResult.ok ? null : valueResult.error,
+        isTimeVarying: (function () {
+          try {
+            return param && param.isTimeVarying ? !!param.isTimeVarying() : null;
+          } catch (errTimeVarying) {
+          }
+          return null;
+        })()
+      };
+    }
+
+    function summarizeParams(component) {
+      var params = [];
+      var collection = null;
+      try {
+        collection = component && component.properties ? component.properties : null;
+      } catch (errProperties) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var param = null;
+        try {
+          param = collection[i];
+        } catch (errParam) {
+        }
+        if (!param) {
+          continue;
+        }
+        params.push(summarizeParam(param, i));
+      }
+      return params;
+    }
+
+    function summarizeComponent(component, componentIndex, includeParams) {
+      return {
+        index: componentIndex,
+        name: safeName(component),
+        matchName: safeMatchName(component),
+        params: includeParams === true ? summarizeParams(component) : []
+      };
+    }
+
+    function summarizeComponents(clip, includeParams) {
+      var components = [];
+      var collection = null;
+      try {
+        collection = clip && clip.components ? clip.components : null;
+      } catch (errComponentCollection) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var component = null;
+        try {
+          component = collection[i];
+        } catch (errComponent) {
+        }
+        if (!component) {
+          continue;
+        }
+        components.push(summarizeComponent(component, i, includeParams));
+      }
+      return components;
+    }
+
+    function summarizeClip(clip, trackIndex, clipIndex, includeParams) {
+      var startTicks = timeValueToTicks(clip && clip.start !== undefined ? clip.start : null);
+      var endTicks = timeValueToTicks(clip && clip.end !== undefined ? clip.end : null);
+      return {
+        kind: "video",
+        trackIndex: trackIndex,
+        track: trackLabel(trackIndex),
+        clipIndex: clipIndex,
+        nodeId: itemNodeId(clip),
+        name: safeName(clip),
+        selected: PremiereBridge._clipSelectionState(clip),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        components: summarizeComponents(clip, includeParams)
+      };
+    }
+
+    function collectSelectedVideoClips() {
+      var targets = [];
+      var trackCount = PremiereBridge._collectionCount(sequence.videoTracks, 64);
+      for (var t = 0; t < trackCount; t++) {
+        var track = null;
+        try {
+          track = sequence.videoTracks[t];
+        } catch (errTrack) {
+        }
+        if (!track || !track.clips) {
+          continue;
+        }
+        var clipCount = PremiereBridge._collectionCount(track.clips, 512);
+        for (var c = 0; c < clipCount; c++) {
+          var clip = null;
+          try {
+            clip = track.clips[c];
+          } catch (errClip) {
+          }
+          if (!clip || !PremiereBridge._clipSelectionState(clip)) {
+            continue;
+          }
+          targets.push({
+            clip: clip,
+            trackIndex: t,
+            clipIndex: c,
+            before: summarizeClip(clip, t, c, true)
+          });
+        }
+      }
+      return targets;
+    }
+
+    function findMatchingComponents(clip) {
+      var matches = [];
+      var collection = null;
+      try {
+        collection = clip && clip.components ? clip.components : null;
+      } catch (errComponentCollection) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var component = null;
+        try {
+          component = collection[i];
+        } catch (errComponent) {
+        }
+        if (!component) {
+          continue;
+        }
+        var summary = summarizeComponent(component, i, true);
+        var nameMatches = normalizeName(summary.name) === normalizeName(effectName) ||
+          normalizeName(summary.matchName) === normalizeName(effectName);
+        var indexMatches = componentIndex !== null && i === componentIndex;
+        if ((componentIndex !== null && indexMatches) || (componentIndex === null && nameMatches)) {
+          matches.push({
+            component: component,
+            summary: summary
+          });
+        }
+      }
+      return matches;
+    }
+
+    function findMatchingParams(component) {
+      var matches = [];
+      var collection = null;
+      try {
+        collection = component && component.properties ? component.properties : null;
+      } catch (errProperties) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var param = null;
+        try {
+          param = collection[i];
+        } catch (errParam) {
+        }
+        if (!param) {
+          continue;
+        }
+        var summary = summarizeParam(param, i);
+        if (normalizeName(summary.name) === normalizeName(paramName) ||
+            normalizeName(summary.matchName) === normalizeName(paramName)) {
+          matches.push({
+            param: param,
+            summary: summary
+          });
+        }
+      }
+      return matches;
+    }
+
+    function parseRequestedValue() {
+      var raw = payload.value;
+      var valueType = payload.valueType ? String(payload.valueType).toLowerCase() : "auto";
+      if (valueType === "string") {
+        return { ok: true, value: String(raw), valueType: "string" };
+      }
+      if (valueType === "number") {
+        var n = Number(raw);
+        if (isNaN(n)) {
+          return { ok: false, error: "--value is not a number" };
+        }
+        return { ok: true, value: n, valueType: "number" };
+      }
+      if (valueType === "boolean") {
+        var normalized = String(raw).toLowerCase();
+        if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+          return { ok: true, value: true, valueType: "boolean" };
+        }
+        if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+          return { ok: true, value: false, valueType: "boolean" };
+        }
+        return { ok: false, error: "--value is not a boolean" };
+      }
+      if (valueType === "json") {
+        try {
+          return { ok: true, value: JSON.parse(String(raw)), valueType: "json" };
+        } catch (errJson) {
+          return { ok: false, error: "--value is not valid JSON: " + String(errJson) };
+        }
+      }
+
+      if (typeof raw === "boolean" || typeof raw === "number") {
+        return { ok: true, value: raw, valueType: typeof raw };
+      }
+      var rawText = String(raw);
+      var rawLower = rawText.toLowerCase();
+      if (rawLower === "true") {
+        return { ok: true, value: true, valueType: "boolean" };
+      }
+      if (rawLower === "false") {
+        return { ok: true, value: false, valueType: "boolean" };
+      }
+      if (rawText !== "" && !isNaN(Number(rawText))) {
+        return { ok: true, value: Number(rawText), valueType: "number" };
+      }
+      return { ok: true, value: rawText, valueType: "string" };
+    }
+
+    var requested = parseRequestedValue();
+    if (!requested.ok) {
+      return PremiereBridge._err(requested.error);
+    }
+
+    var targets = collectSelectedVideoClips();
+    if (!targets.length) {
+      return PremiereBridge._err("No selected video clip found");
+    }
+    if (targets.length > 1 && !allMatches) {
+      var selectedSample = [];
+      for (var s = 0; s < Math.min(5, targets.length); s++) {
+        selectedSample.push(targets[s].before);
+      }
+      return PremiereBridge._err("Multiple selected video clips found. Add --all-matches or select one clip.", {
+        selectedCount: targets.length,
+        selectedSample: selectedSample
+      });
+    }
+    var selectedTargets = allMatches ? targets : [targets[0]];
+
+    function criteriaSummary() {
+      return {
+        effect: effectName,
+        param: paramName,
+        requested: {
+          value: requested.value,
+          valueType: requested.valueType
+        },
+        selected: selectedOnly,
+        allMatches: allMatches,
+        componentIndex: componentIndex
+      };
+    }
+
+    var prepared = [];
+    for (var prep = 0; prep < selectedTargets.length; prep++) {
+      var target = selectedTargets[prep];
+      var componentMatches = findMatchingComponents(target.clip);
+      if (!componentMatches.length) {
+        return PremiereBridge._err("Effect component not found: " + effectName, {
+          criteria: criteriaSummary(),
+          target: target.before,
+          availableComponents: summarizeComponents(target.clip, true)
+        });
+      }
+      if (componentMatches.length > 1 && componentIndex === null) {
+        var componentSample = [];
+        for (var cm = 0; cm < componentMatches.length; cm++) {
+          componentSample.push(componentMatches[cm].summary);
+        }
+        return PremiereBridge._err("Multiple matching effect components found. Provide --component-index.", {
+          criteria: criteriaSummary(),
+          target: target.before,
+          matchingComponents: componentSample
+        });
+      }
+      var componentMatch = componentMatches[0];
+      var paramMatches = findMatchingParams(componentMatch.component);
+      if (!paramMatches.length) {
+        return PremiereBridge._err("Effect parameter not found: " + paramName, {
+          criteria: criteriaSummary(),
+          target: target.before,
+          component: componentMatch.summary
+        });
+      }
+      if (paramMatches.length > 1) {
+        var paramSample = [];
+        for (var pm = 0; pm < paramMatches.length; pm++) {
+          paramSample.push(paramMatches[pm].summary);
+        }
+        return PremiereBridge._err("Multiple matching effect parameters found", {
+          criteria: criteriaSummary(),
+          target: target.before,
+          component: componentMatch.summary,
+          matchingParams: paramSample
+        });
+      }
+      prepared.push({
+        target: target,
+        componentMatch: componentMatch,
+        paramMatch: paramMatches[0]
+      });
+    }
+
+    if (payload.dryRun === true) {
+      var dryMatches = [];
+      for (var d = 0; d < prepared.length; d++) {
+        dryMatches.push({
+          target: prepared[d].target.before,
+          component: prepared[d].componentMatch.summary,
+          parameter: prepared[d].paramMatch.summary
+        });
+      }
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        criteria: criteriaSummary(),
+        selectedCount: targets.length,
+        targetCount: prepared.length,
+        matches: dryMatches
+      });
+    }
+
+    var changed = [];
+    var unchanged = [];
+    var errors = [];
+    for (var i = 0; i < prepared.length; i++) {
+      var item = prepared[i];
+      var beforeParam = summarizeParam(item.paramMatch.param, item.paramMatch.summary.index);
+      var setResult = setParamValue(item.paramMatch.param, requested.value);
+      var afterParam = summarizeParam(item.paramMatch.param, item.paramMatch.summary.index);
+      var afterTarget = summarizeClip(item.target.clip, item.target.trackIndex, item.target.clipIndex, true);
+      var verified = setResult.ok && valuesEqual(afterParam.value, requested.value);
+      var resultEntry = {
+        method: setResult.method,
+        target: {
+          before: item.target.before,
+          after: afterTarget
+        },
+        component: item.componentMatch.summary,
+        parameter: {
+          before: beforeParam,
+          after: afterParam
+        },
+        requested: {
+          value: requested.value,
+          valueType: requested.valueType
+        }
+      };
+      if (verified) {
+        if (valuesEqual(beforeParam.value, afterParam.value)) {
+          unchanged.push(resultEntry);
+        } else {
+          changed.push(resultEntry);
+        }
+      } else {
+        resultEntry.error = setResult.ok ? "Parameter value did not verify after setValue" : setResult.error;
+        resultEntry.verification = {
+          requestedMatchesAfter: valuesEqual(afterParam.value, requested.value)
+        };
+        errors.push(resultEntry);
+      }
+    }
+
+    if (errors.length) {
+      return PremiereBridge._err("Failed to set one or more effect parameters", {
+        criteria: criteriaSummary(),
+        changedCount: changed.length,
+        unchangedCount: unchanged.length,
+        errorCount: errors.length,
+        changed: changed,
+        unchanged: unchanged,
+        errors: errors
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteriaSummary(),
+      changedCount: changed.length,
+      unchangedCount: unchanged.length,
+      changed: changed,
+      unchanged: unchanged
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.setTransition = function (jsonStr) {
   try {
     var payload = PremiereBridge._parse(jsonStr) || {};
