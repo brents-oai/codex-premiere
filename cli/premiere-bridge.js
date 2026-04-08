@@ -28,6 +28,7 @@ Usage:
   premiere-bridge set-clip-state --enabled true|false [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-speed-duration (--speed N | --speed-percent N | --duration-seconds S | --duration-ticks N) [--ripple true|false] [--reverse true|false] [--preserve-audio-pitch true|false] [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge add-effect --name NAME --selected [--all-matches] [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge set-effect-param --effect NAME --param NAME --value VALUE --selected [--value-type auto|number|boolean|string|json] [--component-index N] [--all-matches] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-transition --state present|absent --track V1|A1 (--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N) [--name NAME] [--duration-frames N | --duration-seconds S] [--alignment start|center|end|N] [--single-sided true|false] [--replace true|false] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge replace-clip-source --item-id ID [--selected | --match-name NAME | --timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--track V1|A1] [--kind video|audio] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge nest-selected-clips [--name NAME] [--video-track-index N] [--ignore-track-targeting true|false] [--transport cep|auto] [--port N] [--token TOKEN]
@@ -75,6 +76,7 @@ Notes:
   set-clip-state is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch changes.
   set-clip-speed-duration is currently CEP-only and uses the unsupported QE speed API when available, with DOM readback verification.
   add-effect is currently CEP-only and adds a named video effect to the selected timeline clip.
+  set-effect-param is currently CEP-only and sets one non-keyframed parameter on one matching effect component on the selected timeline clip.
   set-transition is currently CEP-only and targets the edit point on the requested track. Default video transition is Cross Dissolve, default audio transition is Constant Power, and default duration is 15 frames.
   replace-clip-source is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting.
   nest-selected-clips is currently CEP-only and replaces the selected video range with one nested sequence clip. Selected parent audio clips are preserved in place.
@@ -1621,6 +1623,66 @@ function readAddEffectPayload(args) {
   return payload;
 }
 
+function readSetEffectParamPayload(args) {
+  const payload = {};
+
+  const effect = args.effect !== undefined ? args.effect : args["effect-name"];
+  if (effect === undefined || effect === null || String(effect).trim() === "") {
+    throw new Error("Provide --effect NAME for set-effect-param");
+  }
+  payload.effect = String(effect);
+
+  const param = args.param !== undefined ? args.param : args.parameter;
+  if (param === undefined || param === null || String(param).trim() === "") {
+    throw new Error("Provide --param NAME for set-effect-param");
+  }
+  payload.param = String(param);
+
+  if (args.value === undefined) {
+    throw new Error("Provide --value VALUE for set-effect-param");
+  }
+  payload.value = args.value;
+
+  if (args["value-type"] !== undefined) {
+    const valueType = String(args["value-type"]).toLowerCase();
+    if (!["auto", "number", "boolean", "string", "json"].includes(valueType)) {
+      throw new Error("--value-type must be auto, number, boolean, string, or json");
+    }
+    payload.valueType = valueType;
+  }
+
+  if (args["component-index"] !== undefined) {
+    const componentIndex = Number(args["component-index"]);
+    if (!Number.isInteger(componentIndex) || componentIndex < 0) {
+      throw new Error("--component-index must be a non-negative integer");
+    }
+    payload.componentIndex = componentIndex;
+  }
+
+  if (args.selected !== undefined) {
+    const selected = boolOrNull(args.selected);
+    if (selected === null) {
+      throw new Error("--selected must be true or false");
+    }
+    payload.selected = selected;
+  } else {
+    payload.selected = true;
+  }
+  if (payload.selected !== true) {
+    throw new Error("set-effect-param currently requires --selected");
+  }
+
+  if (args["all-matches"] !== undefined) {
+    const allMatches = boolOrNull(args["all-matches"]);
+    if (allMatches === null) {
+      throw new Error("--all-matches must be true or false");
+    }
+    payload.allMatches = allMatches;
+  }
+
+  return payload;
+}
+
 function readReplaceClipSourcePayload(args) {
   const payload = {};
 
@@ -2353,6 +2415,16 @@ async function main() {
     }
     const payload = readAddEffectPayload(args);
     const result = await sendCommandCep(config, "addEffect", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-effect-param") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("set-effect-param is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readSetEffectParamPayload(args);
+    const result = await sendCommandCep(config, "setEffectParam", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
