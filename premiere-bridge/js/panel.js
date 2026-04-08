@@ -681,6 +681,7 @@
     "renameClipInstances",
     "setClipState",
     "setClipSpeedDuration",
+    "addEffect",
     "setTransition",
     "replaceClipSource",
     "nestSelectedClips",
@@ -1049,6 +1050,12 @@
         return evalExtendScript("setClipSpeedDuration", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("setClipSpeedDuration", cleanPayload);
+    }
+    if (command === "addEffect") {
+      if (dryRun) {
+        return evalExtendScript("addEffect", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("addEffect", cleanPayload);
     }
     if (command === "setTransition") {
       if (dryRun) {

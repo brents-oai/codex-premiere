@@ -62,6 +62,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
+./cli/premiere-bridge.js add-effect --transport cep --name "Roughen Edges" --selected
 ./cli/premiere-bridge.js set-transition --transport cep --state present --track V1 --timecode "00;00;10;00" --name "Cross Dissolve" --duration-frames 15
 ./cli/premiere-bridge.js replace-clip-source --transport cep --track V1 --timecode "00;00;10;00" --item-id 123456
 ./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
@@ -148,6 +149,13 @@ Color indices:
 - Apply the update to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 - The command is CEP-only and uses QE `setSpeed(...)` when present, then verifies the result via the DOM `TrackItem.getSpeed()` and visible duration readback.
 
+`add-effect` targeting flags:
+- Add one named video effect to the selected timeline video clip.
+- Provide the effect with `--name`, for example `--name "Roughen Edges"`.
+- Target the current timeline selection with `--selected`. If exactly one video clip is selected, `--selected` is assumed.
+- Add the effect to every selected video clip by adding `--all-matches`; otherwise the bridge errors on multi-clip selections and returns a sample of the selected clips.
+- The command is CEP-only. It uses QE `getVideoEffectByName(...)` plus `addVideoEffect(...)`, then verifies the effect through DOM clip component readback.
+
 `set-transition` edit-point flags:
 - Set explicit transition state at a clip edge with `--state present` or `--state absent`.
 - Target one edit point with `--track V1|A1` plus exactly one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
@@ -191,6 +199,7 @@ Color indices:
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
+- `add-effect` (CEP only; add a named video effect to the selected timeline clip)
 - `set-transition` (CEP only; set a transition present or absent at one track edit point)
 - `replace-clip-source` (CEP only; replace one targeted timeline clip's source with a project item)
 - `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)
