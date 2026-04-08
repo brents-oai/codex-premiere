@@ -27,6 +27,7 @@ Usage:
   premiere-bridge rename-clip-instances --name NAME [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-state --enabled true|false [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge set-clip-speed-duration (--speed N | --speed-percent N | --duration-seconds S | --duration-ticks N) [--ripple true|false] [--reverse true|false] [--preserve-audio-pitch true|false] [--selected] [--match-name NAME] [--all-matches] [--track V1|A1] [--kind video|audio] [--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--transport cep|auto] [--port N] [--token TOKEN]
+  premiere-bridge set-transition --state present|absent --track V1|A1 (--timecode 00;00;10;00 | --frame N | --seconds S | --ticks N) [--name NAME] [--duration-frames N | --duration-seconds S] [--alignment start|center|end|N] [--single-sided true|false] [--replace true|false] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge replace-clip-source --item-id ID [--selected | --match-name NAME | --timecode 00;00;10;00 | --frame N | --seconds S | --ticks N] [--track V1|A1] [--kind video|audio] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge nest-selected-clips [--name NAME] [--video-track-index N] [--ignore-track-targeting true|false] [--transport cep|auto] [--port N] [--token TOKEN]
   premiere-bridge transcript-json [--timeout-seconds N] [--token TOKEN]
@@ -72,6 +73,7 @@ Notes:
   rename-clip-instances is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch renames.
   set-clip-state is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting, and add --all-matches for batch changes.
   set-clip-speed-duration is currently CEP-only and uses the unsupported QE speed API when available, with DOM readback verification.
+  set-transition is currently CEP-only and targets the edit point on the requested track. Default video transition is Cross Dissolve, default audio transition is Constant Power, and default duration is 15 frames.
   replace-clip-source is currently CEP-only. Prefer --track plus --timecode / --frame for deterministic targeting.
   nest-selected-clips is currently CEP-only and replaces the selected video range with one nested sequence clip. Selected parent audio clips are preserved in place.
   set-in-point and set-out-point are currently CEP-only and preserve the untouched side from the active sequence.
@@ -1660,6 +1662,100 @@ function readReplaceClipSourcePayload(args) {
   return payload;
 }
 
+function readSetTransitionPayload(args) {
+  const payload = {};
+
+  const state = String(args.state || "").toLowerCase();
+  if (state !== "present" && state !== "absent") {
+    throw new Error("Provide --state present or --state absent for set-transition");
+  }
+  payload.state = state;
+
+  if (args.track === undefined || args.track === null || String(args.track).trim() === "") {
+    throw new Error("Provide --track V1|A1 for set-transition");
+  }
+  payload.track = String(args.track);
+
+  if (args.name !== undefined) {
+    const name = String(args.name);
+    if (!name.trim()) {
+      throw new Error("--name must be a non-empty string");
+    }
+    payload.name = name;
+  }
+
+  if (args["duration-frames"] !== undefined) {
+    const durationFrames = Number(args["duration-frames"]);
+    if (!Number.isFinite(durationFrames) || durationFrames <= 0) {
+      throw new Error("--duration-frames must be a positive number");
+    }
+    payload.durationFrames = durationFrames;
+  }
+  if (args["duration-seconds"] !== undefined) {
+    const durationSeconds = Number(args["duration-seconds"]);
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      throw new Error("--duration-seconds must be a positive number");
+    }
+    payload.durationSeconds = durationSeconds;
+  }
+  if (payload.durationFrames !== undefined && payload.durationSeconds !== undefined) {
+    throw new Error("Provide at most one duration via --duration-frames or --duration-seconds");
+  }
+
+  if (args.alignment !== undefined) {
+    payload.alignment = String(args.alignment);
+  }
+  if (args["single-sided"] !== undefined) {
+    const singleSided = boolOrNull(args["single-sided"]);
+    if (singleSided === null) {
+      throw new Error("--single-sided must be true or false");
+    }
+    payload.singleSided = singleSided;
+  }
+  if (args.replace !== undefined) {
+    const replace = boolOrNull(args.replace);
+    if (replace === null) {
+      throw new Error("--replace must be true or false");
+    }
+    payload.replace = replace;
+  }
+
+  let timeSelectorCount = 0;
+  if (args.timecode !== undefined) {
+    payload.timecode = String(args.timecode);
+    timeSelectorCount += 1;
+  }
+  if (args.frame !== undefined) {
+    const frame = Number(args.frame);
+    if (!Number.isFinite(frame) || frame < 0) {
+      throw new Error("--frame must be a non-negative number");
+    }
+    payload.frame = frame;
+    timeSelectorCount += 1;
+  }
+  if (args.seconds !== undefined) {
+    const seconds = Number(args.seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("--seconds must be a non-negative number");
+    }
+    payload.seconds = seconds;
+    timeSelectorCount += 1;
+  }
+  if (args.ticks !== undefined) {
+    const ticks = Number(args.ticks);
+    if (!Number.isFinite(ticks) || ticks < 0) {
+      throw new Error("--ticks must be a non-negative number");
+    }
+    payload.ticks = ticks;
+    timeSelectorCount += 1;
+  }
+  if (timeSelectorCount !== 1) {
+    throw new Error("Provide exactly one edit-point selector via --timecode, --frame, --seconds, or --ticks");
+  }
+
+  return payload;
+}
+
 function readNestSelectedClipsPayload(args) {
   const payload = {};
 
@@ -2213,6 +2309,16 @@ async function main() {
     }
     const payload = readSetClipSpeedDurationPayload(args);
     const result = await sendCommandCep(config, "setClipSpeedDuration", attachDryRun(payload, dryRun));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "set-transition") {
+    if ((config.transport || "").toLowerCase() === "uxp") {
+      throw new Error("set-transition is currently supported only on CEP. Use --transport cep.");
+    }
+    const payload = readSetTransitionPayload(args);
+    const result = await sendCommandCep(config, "setTransition", attachDryRun(payload, dryRun));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
