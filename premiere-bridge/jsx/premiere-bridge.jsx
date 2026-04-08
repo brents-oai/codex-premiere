@@ -7423,17 +7423,6 @@ PremiereBridge.setClipSpeedDuration = function (jsonStr) {
       return !!value;
     }
 
-    function numericOrNull(value) {
-      if (value === null || value === undefined) {
-        return null;
-      }
-      var n = Number(value);
-      if (isNaN(n)) {
-        return null;
-      }
-      return n;
-    }
-
     function timeValueToTicks(value) {
       try {
         return PremiereBridge._timeToTicks(value);
@@ -8016,6 +8005,770 @@ PremiereBridge.setClipSpeedDuration = function (jsonStr) {
       unchangedCount: unchanged.length,
       changed: changed,
       unchanged: unchanged
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
+PremiereBridge.setTransition = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project && app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var state = payload.state ? String(payload.state).toLowerCase() : "";
+    if (state !== "present" && state !== "absent") {
+      return PremiereBridge._err("state must be present or absent");
+    }
+
+    var trackRaw = payload.track !== undefined && payload.track !== null ? String(payload.track).toUpperCase() : "";
+    var kind = null;
+    var trackIndex = null;
+    if (trackRaw.indexOf("V") === 0) {
+      kind = "video";
+      trackIndex = Number(trackRaw.slice(1)) - 1;
+    } else if (trackRaw.indexOf("A") === 0) {
+      kind = "audio";
+      trackIndex = Number(trackRaw.slice(1)) - 1;
+    }
+    if (!kind || isNaN(trackIndex) || trackIndex < 0 || Math.round(trackIndex) !== trackIndex) {
+      return PremiereBridge._err("Provide a valid track selector such as V1 or A1");
+    }
+
+    var qeSeq = PremiereBridge._getQeSequence();
+    var targetTicks = PremiereBridge._markerPayloadToTicks({
+      timecode: payload.timecode,
+      frame: payload.frame,
+      timeSeconds: payload.seconds,
+      timeTicks: payload.ticks
+    }, sequence, qeSeq);
+    if (targetTicks === null || isNaN(Number(targetTicks))) {
+      return PremiereBridge._err("Provide exactly one valid edit-point selector");
+    }
+    targetTicks = Math.round(Number(targetTicks));
+
+    var transitionName = payload.name !== undefined && payload.name !== null && String(payload.name).replace(/^\s+|\s+$/g, "")
+      ? String(payload.name)
+      : (kind === "audio" ? "Constant Power" : "Cross Dissolve");
+    var replaceExisting = payload.replace === true;
+
+    function trackLabel() {
+      return (kind === "audio" ? "A" : "V") + String(trackIndex + 1);
+    }
+
+    function numericOrNull(value) {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      var n = Number(value);
+      if (isNaN(n)) {
+        return null;
+      }
+      return n;
+    }
+
+    function timeValueToTicks(value) {
+      var ticks = PremiereBridge._timeToTicks(value);
+      if (ticks !== null && !isNaN(Number(ticks))) {
+        return Math.round(Number(ticks));
+      }
+      return null;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function itemName(item) {
+      if (!item) {
+        return null;
+      }
+      try {
+        if (item.name !== undefined && item.name !== null) {
+          return String(item.name);
+        }
+      } catch (errName) {
+      }
+      try {
+        if (item.projectItem && item.projectItem.name !== undefined && item.projectItem.name !== null) {
+          return String(item.projectItem.name);
+        }
+      } catch (errProjectItemName) {
+      }
+      return null;
+    }
+
+    function itemNodeId(item) {
+      if (!item) {
+        return null;
+      }
+      try {
+        if (item.nodeId !== undefined && item.nodeId !== null) {
+          return String(item.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (item.id !== undefined && item.id !== null) {
+          return String(item.id);
+        }
+      } catch (errId) {
+      }
+      return null;
+    }
+
+    function summarizeTrackItem(item, itemKind, itemTrackIndex, itemIndex) {
+      var startTicks = timeValueToTicks(item && item.start !== undefined ? item.start : null);
+      var endTicks = timeValueToTicks(item && item.end !== undefined ? item.end : null);
+      return {
+        kind: itemKind,
+        track: (itemKind === "audio" ? "A" : "V") + String(itemTrackIndex + 1),
+        trackIndex: itemTrackIndex,
+        index: itemIndex,
+        nodeId: itemNodeId(item),
+        name: itemName(item),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        duration: startTicks !== null && endTicks !== null
+          ? summarizeTicks(Math.max(0, endTicks - startTicks))
+          : summarizeTicks(null)
+      };
+    }
+
+    function tickTolerance() {
+      var oneFrameTicks = null;
+      try {
+        oneFrameTicks = PremiereBridge._frameToTicks(1, sequence, qeSeq) - PremiereBridge._frameToTicks(0, sequence, qeSeq);
+      } catch (errFrameTicks) {
+      }
+      if (oneFrameTicks === null || isNaN(Number(oneFrameTicks)) || Number(oneFrameTicks) <= 0) {
+        oneFrameTicks = PremiereBridge.TICKS_PER_SECOND / 60;
+      }
+      return Math.max(2, Math.round(Number(oneFrameTicks) / 2));
+    }
+
+    var tolerance = tickTolerance();
+
+    function closeEnoughTicks(actual, expected) {
+      if (actual === null || actual === undefined || expected === null || expected === undefined) {
+        return false;
+      }
+      var a = Number(actual);
+      var e = Number(expected);
+      if (isNaN(a) || isNaN(e)) {
+        return false;
+      }
+      return Math.abs(a - e) <= tolerance;
+    }
+
+    function transitionMatchesTarget(summary) {
+      var startTicks = summary && summary.start && summary.start.ticks !== null ? Number(summary.start.ticks) : null;
+      var endTicks = summary && summary.end && summary.end.ticks !== null ? Number(summary.end.ticks) : null;
+      if (startTicks === null || endTicks === null) {
+        return false;
+      }
+      if (targetTicks >= startTicks - tolerance && targetTicks <= endTicks + tolerance) {
+        return true;
+      }
+      var center = startTicks + ((endTicks - startTicks) / 2);
+      return closeEnoughTicks(startTicks, targetTicks) ||
+        closeEnoughTicks(endTicks, targetTicks) ||
+        closeEnoughTicks(center, targetTicks);
+    }
+
+    var trackCollection = kind === "audio" ? sequence.audioTracks : sequence.videoTracks;
+    var domTrack = null;
+    try {
+      domTrack = trackCollection ? trackCollection[trackIndex] : null;
+    } catch (errDomTrack) {
+    }
+    if (!domTrack) {
+      return PremiereBridge._err((kind === "audio" ? "Audio" : "Video") + " track not found", {
+        track: trackLabel(),
+        trackIndex: trackIndex
+      });
+    }
+
+    function collectClips() {
+      var clips = [];
+      var clipCollection = domTrack && domTrack.clips ? domTrack.clips : null;
+      var clipCount = PremiereBridge._collectionCount(clipCollection, 512);
+      for (var i = 0; i < clipCount; i++) {
+        var clip = null;
+        try {
+          clip = clipCollection[i];
+        } catch (errClip) {
+        }
+        if (!clip) {
+          continue;
+        }
+        clips.push({
+          item: clip,
+          summary: summarizeTrackItem(clip, kind, trackIndex, i)
+        });
+      }
+      return clips;
+    }
+
+    function collectTransitions() {
+      var transitions = [];
+      var transitionCollection = domTrack && domTrack.transitions ? domTrack.transitions : null;
+      var transitionCount = PremiereBridge._collectionCount(transitionCollection, 512);
+      for (var i = 0; i < transitionCount; i++) {
+        var transition = null;
+        try {
+          transition = transitionCollection[i];
+        } catch (errTransition) {
+        }
+        if (!transition) {
+          continue;
+        }
+        var summary = summarizeTrackItem(transition, kind, trackIndex, i);
+        transitions.push({
+          item: transition,
+          summary: summary,
+          matchesTarget: transitionMatchesTarget(summary)
+        });
+      }
+      return transitions;
+    }
+
+    function edgeDistance(summary, side) {
+      var ticks = side === "start" && summary.start ? summary.start.ticks : (summary.end ? summary.end.ticks : null);
+      if (ticks === null || ticks === undefined) {
+        return null;
+      }
+      var n = Number(ticks);
+      if (isNaN(n)) {
+        return null;
+      }
+      return Math.abs(n - targetTicks);
+    }
+
+    function findEditPoint(clips) {
+      var outgoing = null;
+      var incoming = null;
+      var nearest = null;
+      for (var i = 0; i < clips.length; i++) {
+        var clip = clips[i];
+        var startDistance = edgeDistance(clip.summary, "start");
+        var endDistance = edgeDistance(clip.summary, "end");
+        if (startDistance !== null && (nearest === null || startDistance < nearest.distanceTicks)) {
+          nearest = { clip: clip, side: "start", distanceTicks: startDistance };
+        }
+        if (endDistance !== null && (nearest === null || endDistance < nearest.distanceTicks)) {
+          nearest = { clip: clip, side: "end", distanceTicks: endDistance };
+        }
+        if (startDistance !== null && startDistance <= tolerance) {
+          incoming = clip;
+        }
+        if (endDistance !== null && endDistance <= tolerance) {
+          outgoing = clip;
+        }
+      }
+
+      var target = outgoing || incoming;
+      if (!target) {
+        return {
+          ok: false,
+          nearest: nearest,
+          error: "No clip edge found at the requested time on " + trackLabel()
+        };
+      }
+
+      return {
+        ok: true,
+        target: target,
+        targetSide: outgoing ? "end" : "start",
+        outgoing: outgoing,
+        incoming: incoming,
+        nearest: nearest
+      };
+    }
+
+    function getQeItemCount(track) {
+      if (!track) {
+        return null;
+      }
+      var n = null;
+      try {
+        if (track.numItems !== undefined && track.numItems !== null) {
+          n = typeof track.numItems === "function" ? Number(track.numItems()) : Number(track.numItems);
+          if (!isNaN(n) && n >= 0) {
+            return Math.round(n);
+          }
+        }
+      } catch (errNumItems) {
+      }
+      return null;
+    }
+
+    function qeItemTimes(item) {
+      return {
+        startTicks: timeValueToTicks(item && item.start !== undefined ? item.start : null),
+        endTicks: timeValueToTicks(item && item.end !== undefined ? item.end : null)
+      };
+    }
+
+    function findQeTrackItem(domClip) {
+      if (!qeSeq) {
+        return { item: null, method: null, errors: ["QE sequence unavailable"] };
+      }
+      var getterName = kind === "audio" ? "getAudioTrackAt" : "getVideoTrackAt";
+      if (!qeSeq[getterName]) {
+        return { item: null, method: null, errors: ["QE " + getterName + " unavailable"] };
+      }
+      var qeTrack = null;
+      try {
+        qeTrack = qeSeq[getterName](trackIndex);
+      } catch (errQeTrack) {
+        return { item: null, method: null, errors: ["QE track lookup failed: " + String(errQeTrack)] };
+      }
+      if (!qeTrack || !qeTrack.getItemAt) {
+        return { item: null, method: null, errors: ["QE track item lookup unavailable"] };
+      }
+
+      var wanted = summarizeTrackItem(domClip, kind, trackIndex, -1);
+      var wantedStart = wanted.start && wanted.start.ticks !== null ? Number(wanted.start.ticks) : null;
+      var wantedEnd = wanted.end && wanted.end.ticks !== null ? Number(wanted.end.ticks) : null;
+      var count = getQeItemCount(qeTrack);
+      var limit = count !== null ? Math.min(count, 512) : 512;
+      var errors = [];
+      var misses = 0;
+      for (var i = 0; i < limit; i++) {
+        var item = null;
+        var itemExpression = "qe.project.getActiveSequence()." + getterName + "(" + trackIndex + ").getItemAt(" + i + ")";
+        try {
+          item = qeTrack.getItemAt(i);
+        } catch (errQeItem) {
+          try {
+            item = eval(itemExpression);
+          } catch (errQeItemDirect) {
+            errors.push("qeTrack.getItemAt(" + i + "): " + String(errQeItem) + "; " + itemExpression + ": " + String(errQeItemDirect));
+            if (count === null) {
+              break;
+            }
+          }
+        }
+        if (!item) {
+          misses++;
+          if (count === null && misses > 12) {
+            break;
+          }
+          continue;
+        }
+        misses = 0;
+        if (!item.addTransition) {
+          continue;
+        }
+        var times = qeItemTimes(item);
+        if (closeEnoughTicks(times.startTicks, wantedStart) && closeEnoughTicks(times.endTicks, wantedEnd)) {
+          return {
+            item: item,
+            method: "qe." + getterName + "(" + trackIndex + ").getItemAt(" + i + ")",
+            directExpression: itemExpression,
+            errors: errors
+          };
+        }
+      }
+      return {
+        item: null,
+        method: null,
+        errors: errors.length ? errors : ["No matching QE track item with addTransition found"]
+      };
+    }
+
+    function durationFramesArg() {
+      if (payload.durationFrames !== undefined && payload.durationFrames !== null) {
+        return String(Math.round(Number(payload.durationFrames)));
+      }
+      if (payload.durationSeconds !== undefined && payload.durationSeconds !== null) {
+        var oneFrameTicks = PremiereBridge._frameToTicks(1, sequence, qeSeq) - PremiereBridge._frameToTicks(0, sequence, qeSeq);
+        var frames = Math.max(1, Math.round((Number(payload.durationSeconds) * PremiereBridge.TICKS_PER_SECOND) / oneFrameTicks));
+        return String(frames);
+      }
+      return "15";
+    }
+
+    function alignmentArg() {
+      if (payload.alignment === undefined || payload.alignment === null || payload.alignment === "") {
+        return 0.5;
+      }
+      var text = String(payload.alignment).toLowerCase();
+      if (text === "start") {
+        return 0;
+      }
+      if (text === "center" || text === "centre") {
+        return 0.5;
+      }
+      if (text === "end") {
+        return 1;
+      }
+      var value = Number(payload.alignment);
+      if (!isNaN(value) && value >= 0 && value <= 1) {
+        return value;
+      }
+      return null;
+    }
+
+    function getTransitionByName() {
+      if (!qe || !qe.project) {
+        return { transition: null, method: null, error: "QE project unavailable" };
+      }
+      var getterName = kind === "audio" ? "getAudioTransitionByName" : "getVideoTransitionByName";
+      if (!qe.project[getterName]) {
+        return { transition: null, method: null, error: "QE project " + getterName + " unavailable" };
+      }
+      try {
+        var transition = qe.project[getterName](transitionName);
+        if (transition) {
+          return {
+            transition: transition,
+            method: "qe.project." + getterName + "(" + transitionName + ")",
+            error: null
+          };
+        }
+      } catch (errGetTransition) {
+        return {
+          transition: null,
+          method: "qe.project." + getterName + "(" + transitionName + ")",
+          error: String(errGetTransition)
+        };
+      }
+      return {
+        transition: null,
+        method: "qe.project." + getterName + "(" + transitionName + ")",
+        error: "Transition not found"
+      };
+    }
+
+    function reflectNames(obj, memberName) {
+      var names = [];
+      try {
+        if (obj && obj.reflect && obj.reflect[memberName]) {
+          var members = obj.reflect[memberName];
+          var count = members.length !== undefined ? members.length : 0;
+          for (var i = 0; i < count && i < 80; i++) {
+            try {
+              names.push(String(members[i].name || members[i]));
+            } catch (errMemberName) {
+            }
+          }
+        }
+      } catch (errReflect) {
+      }
+      return names;
+    }
+
+    function qeTrackAvailability() {
+      var getterName = kind === "audio" ? "getAudioTrackAt" : "getVideoTrackAt";
+      var result = {
+        sequenceAvailable: !!qeSeq,
+        getter: getterName,
+        trackAvailable: false,
+        methodNames: [],
+        propertyNames: [],
+        error: null
+      };
+      if (!qeSeq || !qeSeq[getterName]) {
+        result.error = "QE track getter unavailable";
+        return result;
+      }
+      try {
+        var qeTrack = qeSeq[getterName](trackIndex);
+        result.trackAvailable = !!qeTrack;
+        result.methodNames = reflectNames(qeTrack, "methods");
+        result.propertyNames = reflectNames(qeTrack, "properties");
+      } catch (errQeTrackAvailability) {
+        result.error = String(errQeTrackAvailability);
+      }
+      return result;
+    }
+
+    function removeTransitionItems(transitions) {
+      var removed = [];
+      var errors = [];
+      for (var i = 0; i < transitions.length; i++) {
+        var transition = transitions[i];
+        var removeMethod = null;
+        try {
+          transition.item.remove(false, false);
+          removeMethod = "trackItem.remove(false, false)";
+        } catch (errRemoveBool) {
+          try {
+            transition.item.remove(0, 0);
+            removeMethod = "trackItem.remove(0, 0)";
+          } catch (errRemoveNumber) {
+            errors.push({
+              transition: transition.summary,
+              error: "trackItem.remove(false, false): " + String(errRemoveBool) + "; trackItem.remove(0, 0): " + String(errRemoveNumber)
+            });
+          }
+        }
+        if (removeMethod) {
+          removed.push({
+            method: removeMethod,
+            before: transition.summary
+          });
+        }
+      }
+      return { removed: removed, errors: errors };
+    }
+
+    function summaryList(items) {
+      var summaries = [];
+      for (var i = 0; items && i < items.length; i++) {
+        summaries.push(items[i].summary);
+      }
+      return summaries;
+    }
+
+    var beforeTransitions = collectTransitions();
+    var targetTransitions = [];
+    for (var bt = 0; bt < beforeTransitions.length; bt++) {
+      if (beforeTransitions[bt].matchesTarget) {
+        targetTransitions.push(beforeTransitions[bt]);
+      }
+    }
+    var beforeClips = collectClips();
+    var editPoint = findEditPoint(beforeClips);
+
+    function criteriaSummary() {
+      return {
+        state: state,
+        kind: kind,
+        track: trackLabel(),
+        trackIndex: trackIndex,
+        time: summarizeTicks(targetTicks),
+        name: transitionName,
+        durationFrames: durationFramesArg(),
+        durationSeconds: payload.durationSeconds !== undefined ? payload.durationSeconds : null,
+        alignment: payload.alignment !== undefined ? payload.alignment : "center",
+        singleSided: payload.singleSided !== undefined ? payload.singleSided : null,
+        replace: replaceExisting
+      };
+    }
+
+    if (payload.dryRun === true) {
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        criteria: criteriaSummary(),
+        existingTransitionsAtTarget: summaryList(targetTransitions),
+        editPoint: editPoint.ok
+          ? {
+              targetSide: editPoint.targetSide,
+              outgoing: editPoint.outgoing ? editPoint.outgoing.summary : null,
+              incoming: editPoint.incoming ? editPoint.incoming.summary : null
+            }
+          : {
+              error: editPoint.error,
+              nearest: editPoint.nearest ? {
+                side: editPoint.nearest.side,
+                distanceTicks: String(Math.round(editPoint.nearest.distanceTicks)),
+                clip: editPoint.nearest.clip.summary
+              } : null
+            },
+        availability: {
+          qeAvailable: !!qeSeq,
+          transitionLookup: getTransitionByName().method,
+          transitionCount: beforeTransitions.length,
+          qeTrack: qeTrackAvailability()
+        }
+      });
+    }
+
+    if (state === "absent") {
+      if (!targetTransitions.length) {
+        return PremiereBridge._ok({
+          criteria: criteriaSummary(),
+          changedCount: 0,
+          unchangedCount: 1,
+          beforeTransitionsAtTarget: [],
+          afterTransitionsAtTarget: []
+        });
+      }
+      var removeResult = removeTransitionItems(targetTransitions);
+      var afterRemoveTransitions = collectTransitions();
+      var afterTargetTransitions = [];
+      for (var ar = 0; ar < afterRemoveTransitions.length; ar++) {
+        if (afterRemoveTransitions[ar].matchesTarget) {
+          afterTargetTransitions.push(afterRemoveTransitions[ar]);
+        }
+      }
+      if (removeResult.errors.length || afterTargetTransitions.length) {
+        return PremiereBridge._err("Failed to remove one or more transitions at the requested edit point", {
+          criteria: criteriaSummary(),
+          removed: removeResult.removed,
+          errors: removeResult.errors,
+          beforeTransitionsAtTarget: summaryList(targetTransitions),
+          afterTransitionsAtTarget: summaryList(afterTargetTransitions)
+        });
+      }
+      return PremiereBridge._ok({
+        criteria: criteriaSummary(),
+        changedCount: removeResult.removed.length,
+        unchangedCount: 0,
+        removed: removeResult.removed,
+        beforeTransitionsAtTarget: summaryList(targetTransitions),
+        afterTransitionsAtTarget: []
+      });
+    }
+
+    if (targetTransitions.length && !replaceExisting) {
+      return PremiereBridge._ok({
+        criteria: criteriaSummary(),
+        changedCount: 0,
+        unchangedCount: targetTransitions.length,
+        existingTransitionsAtTarget: summaryList(targetTransitions)
+      });
+    }
+
+    if (!editPoint.ok) {
+      return PremiereBridge._err(editPoint.error, {
+        criteria: criteriaSummary(),
+        existingTransitionsAtTarget: summaryList(targetTransitions),
+        nearest: editPoint.nearest ? {
+          side: editPoint.nearest.side,
+          distanceTicks: String(Math.round(editPoint.nearest.distanceTicks)),
+          clip: editPoint.nearest.clip.summary
+        } : null
+      });
+    }
+
+    var alignment = alignmentArg();
+    if (alignment === null) {
+      return PremiereBridge._err("Invalid alignment; use start, center, end, or a number from 0 through 1", {
+        criteria: criteriaSummary()
+      });
+    }
+
+    var replaceRemoveResult = null;
+    if (replaceExisting && targetTransitions.length) {
+      replaceRemoveResult = removeTransitionItems(targetTransitions);
+      if (replaceRemoveResult.errors.length) {
+        return PremiereBridge._err("Failed to remove existing transition before replacement", {
+          criteria: criteriaSummary(),
+          errors: replaceRemoveResult.errors,
+          removed: replaceRemoveResult.removed
+        });
+      }
+    }
+
+    var transitionLookup = getTransitionByName();
+    if (!transitionLookup.transition) {
+      return PremiereBridge._err("Transition not found: " + transitionName, {
+        criteria: criteriaSummary(),
+        lookup: transitionLookup
+      });
+    }
+
+    var qeMatch = findQeTrackItem(editPoint.target.item);
+    if (!qeMatch.item) {
+      return PremiereBridge._err("Unable to find a matching QE track item for transition placement", {
+        criteria: criteriaSummary(),
+        editPoint: {
+          targetSide: editPoint.targetSide,
+          outgoing: editPoint.outgoing ? editPoint.outgoing.summary : null,
+          incoming: editPoint.incoming ? editPoint.incoming.summary : null
+        },
+        fallbackErrors: qeMatch.errors
+      });
+    }
+
+    var addToStart = editPoint.targetSide === "start";
+    var singleSided = payload.singleSided !== undefined && payload.singleSided !== null
+      ? payload.singleSided === true
+      : !(editPoint.outgoing && editPoint.incoming);
+    var durationArg = durationFramesArg();
+    var offsetArg = "0:00";
+    var addMethod = (qeMatch.directExpression || qeMatch.method) + ".addTransition(transition, " +
+      String(addToStart) + ", " + durationArg + ", " + offsetArg + ", " +
+      String(alignment) + ", " + String(singleSided) + ", true)";
+
+    try {
+      if (qeMatch.directExpression) {
+        PremiereBridge._setTransitionQeTransition = transitionLookup.transition;
+        eval(qeMatch.directExpression +
+          ".addTransition(PremiereBridge._setTransitionQeTransition, " +
+          String(addToStart) + ", \"" + durationArg + "\", \"" + offsetArg + "\", " +
+          String(alignment) + ", " + String(singleSided) + ", true)");
+        PremiereBridge._setTransitionQeTransition = null;
+      } else {
+        qeMatch.item.addTransition(
+          transitionLookup.transition,
+          addToStart,
+          durationArg,
+          offsetArg,
+          alignment,
+          singleSided,
+          true
+        );
+      }
+    } catch (errAddTransition) {
+      PremiereBridge._setTransitionQeTransition = null;
+      return PremiereBridge._err("QE addTransition failed: " + String(errAddTransition), {
+        criteria: criteriaSummary(),
+        method: addMethod,
+        lookup: transitionLookup,
+        fallbackErrors: qeMatch.errors
+      });
+    }
+
+    var afterTransitions = collectTransitions();
+    var afterTargetTransitions = [];
+    for (var at = 0; at < afterTransitions.length; at++) {
+      if (afterTransitions[at].matchesTarget) {
+        afterTargetTransitions.push(afterTransitions[at]);
+      }
+    }
+    if (!afterTargetTransitions.length) {
+      return PremiereBridge._err("Transition add completed but did not verify in the sequence transition collection", {
+        criteria: criteriaSummary(),
+        method: addMethod,
+        lookup: transitionLookup,
+        replaceRemoved: replaceRemoveResult ? replaceRemoveResult.removed : [],
+        beforeTransitionsAtTarget: summaryList(targetTransitions),
+        afterTransitionsAtTarget: []
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteriaSummary(),
+      changedCount: 1,
+      unchangedCount: 0,
+      method: addMethod,
+      lookup: {
+        method: transitionLookup.method,
+        name: transitionName
+      },
+      applied: {
+        addToStart: addToStart,
+        targetSide: editPoint.targetSide,
+        durationFrames: durationArg,
+        offset: offsetArg,
+        alignment: alignment,
+        singleSided: singleSided
+      },
+      editPoint: {
+        outgoing: editPoint.outgoing ? editPoint.outgoing.summary : null,
+        incoming: editPoint.incoming ? editPoint.incoming.summary : null
+      },
+      replaceRemoved: replaceRemoveResult ? replaceRemoveResult.removed : [],
+      beforeTransitionsAtTarget: summaryList(targetTransitions),
+      afterTransitionsAtTarget: summaryList(afterTargetTransitions),
+      fallbackErrors: qeMatch.errors
     });
   } catch (err) {
     return PremiereBridge._err(String(err));

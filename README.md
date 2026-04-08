@@ -62,6 +62,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js rename-clip-instances --transport cep --track V1 --timecode "00;00;10;00" --name "Host CU"
 ./cli/premiere-bridge.js set-clip-state --transport cep --track V1 --timecode "00;00;10;00" --enabled false
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
+./cli/premiere-bridge.js set-transition --transport cep --state present --track V1 --timecode "00;00;10;00" --name "Cross Dissolve" --duration-frames 15
 ./cli/premiere-bridge.js replace-clip-source --transport cep --track V1 --timecode "00;00;10;00" --item-id 123456
 ./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
 ./cli/premiere-bridge.js menu-command-id --name "Extract"
@@ -147,6 +148,15 @@ Color indices:
 - Apply the update to every match by adding `--all-matches`; otherwise the bridge errors on ambiguous selectors and returns a sample of the matching clips.
 - The command is CEP-only and uses QE `setSpeed(...)` when present, then verifies the result via the DOM `TrackItem.getSpeed()` and visible duration readback.
 
+`set-transition` edit-point flags:
+- Set explicit transition state at a clip edge with `--state present` or `--state absent`.
+- Target one edit point with `--track V1|A1` plus exactly one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
+- Add video transitions by name with `--name "Cross Dissolve"`; when `--name` is omitted, video tracks use `Cross Dissolve` and audio tracks use `Constant Power`.
+- Set transition duration with `--duration-frames` or `--duration-seconds`; the default is 15 frames.
+- Use `--alignment start|center|end|N` for QE alignment and `--single-sided true|false` when you need to force a one-sided transition. By default the bridge uses a two-sided transition at a normal cut and a one-sided transition when only one clip edge exists.
+- `--state present` leaves an existing transition at the edit point intact unless `--replace true` is provided. `--state absent` removes every transition item that overlaps the target edit point on that track.
+- The command is CEP-only. It uses QE `addTransition(...)` for adds, DOM transition `TrackItem.remove(...)` for removals, and verifies the target track's transition collection after writing.
+
 `replace-clip-source` targeting flags:
 - Replace the media source for one matched timeline clip on the active sequence. Use `find-item` first and pass the replacement project item's `nodeId`/`id` as `--item-id`.
 - Target the timeline clip with `--selected`, `--match-name`, or one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
@@ -181,6 +191,7 @@ Color indices:
 - `rename-clip-instances` (CEP only; rename clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-state` (CEP only; enable or disable clip instances by selection, name, and/or exact track/time selectors)
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
+- `set-transition` (CEP only; set a transition present or absent at one track edit point)
 - `replace-clip-source` (CEP only; replace one targeted timeline clip's source with a project item)
 - `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)
 - `menu-command-id`
