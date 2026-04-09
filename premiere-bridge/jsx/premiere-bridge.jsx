@@ -9074,6 +9074,726 @@ PremiereBridge.setEffectParam = function (jsonStr) {
   }
 };
 
+PremiereBridge.removeEffect = function (jsonStr) {
+  try {
+    var payload = PremiereBridge._parse(jsonStr) || {};
+    var sequence = app.project.activeSequence;
+    if (!sequence) {
+      return PremiereBridge._err("No active sequence");
+    }
+
+    var effectName = payload.name !== undefined && payload.name !== null
+      ? String(payload.name)
+      : (payload.effect !== undefined && payload.effect !== null ? String(payload.effect) : "");
+    if (!effectName.replace(/^\s+|\s+$/g, "")) {
+      return PremiereBridge._err("Provide effect name");
+    }
+
+    var selectedOnly = payload.selected !== false;
+    if (!selectedOnly) {
+      return PremiereBridge._err("removeEffect currently targets selected video clips only");
+    }
+    var allMatches = payload.allMatches === true;
+    var allComponentMatches = payload.allComponentMatches === true;
+    var componentIndex = payload.componentIndex !== undefined && payload.componentIndex !== null
+      ? Number(payload.componentIndex)
+      : null;
+    if (componentIndex !== null && (isNaN(componentIndex) || componentIndex < 0 || Math.round(componentIndex) !== componentIndex)) {
+      return PremiereBridge._err("componentIndex must be a non-negative integer");
+    }
+    if (componentIndex !== null && allComponentMatches) {
+      return PremiereBridge._err("Use either componentIndex or allComponentMatches, not both");
+    }
+    var qeSeq = PremiereBridge._getQeSequence();
+
+    function trackLabel(trackIndex) {
+      return "V" + String(Number(trackIndex) + 1);
+    }
+
+    function timeValueToTicks(value) {
+      var ticks = PremiereBridge._timeToTicks(value);
+      if (ticks !== null && ticks !== undefined && !isNaN(Number(ticks))) {
+        return Math.round(Number(ticks));
+      }
+      return null;
+    }
+
+    function summarizeTicks(ticksValue) {
+      if (ticksValue === null || ticksValue === undefined || isNaN(Number(ticksValue))) {
+        return { ticks: null, seconds: null, timecode: null };
+      }
+      var rounded = Math.round(Number(ticksValue));
+      return {
+        ticks: String(rounded),
+        seconds: rounded / PremiereBridge.TICKS_PER_SECOND,
+        timecode: PremiereBridge._ticksToTimecode(rounded)
+      };
+    }
+
+    function safeName(obj) {
+      if (!obj) {
+        return null;
+      }
+      try {
+        if (obj.displayName !== undefined && obj.displayName !== null) {
+          return String(obj.displayName);
+        }
+      } catch (errDisplayName) {
+      }
+      try {
+        if (obj.name !== undefined && obj.name !== null) {
+          return String(obj.name);
+        }
+      } catch (errName) {
+      }
+      try {
+        if (obj.matchName !== undefined && obj.matchName !== null) {
+          return String(obj.matchName);
+        }
+      } catch (errMatchName) {
+      }
+      return null;
+    }
+
+    function safeMatchName(obj) {
+      try {
+        if (obj && obj.matchName !== undefined && obj.matchName !== null) {
+          return String(obj.matchName);
+        }
+      } catch (errMatchName) {
+      }
+      return null;
+    }
+
+    function itemNodeId(item) {
+      if (!item) {
+        return null;
+      }
+      try {
+        if (item.nodeId !== undefined && item.nodeId !== null) {
+          return String(item.nodeId);
+        }
+      } catch (errNodeId) {
+      }
+      try {
+        if (item.id !== undefined && item.id !== null) {
+          return String(item.id);
+        }
+      } catch (errId) {
+      }
+      return null;
+    }
+
+    function normalizeName(name) {
+      return String(name || "").toLowerCase().replace(/\s+/g, "");
+    }
+
+    function reflectNames(obj, memberName) {
+      var names = [];
+      try {
+        if (obj && obj.reflect && obj.reflect[memberName]) {
+          var members = obj.reflect[memberName];
+          var count = members.length !== undefined ? members.length : 0;
+          for (var i = 0; i < count && i < 80; i++) {
+            try {
+              names.push(String(members[i].name || members[i]));
+            } catch (errMemberName) {
+            }
+          }
+        }
+      } catch (errReflect) {
+      }
+      return names;
+    }
+
+    function summarizeComponent(component, componentIndex) {
+      return {
+        index: componentIndex,
+        name: safeName(component),
+        matchName: safeMatchName(component)
+      };
+    }
+
+    function summarizeComponents(clip) {
+      var components = [];
+      var collection = null;
+      try {
+        collection = clip && clip.components ? clip.components : null;
+      } catch (errComponentCollection) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var component = null;
+        try {
+          component = collection[i];
+        } catch (errComponent) {
+        }
+        if (!component) {
+          continue;
+        }
+        components.push(summarizeComponent(component, i));
+      }
+      return components;
+    }
+
+    function summarizeClip(clip, trackIndex, clipIndex) {
+      var startTicks = timeValueToTicks(clip && clip.start !== undefined ? clip.start : null);
+      var endTicks = timeValueToTicks(clip && clip.end !== undefined ? clip.end : null);
+      return {
+        kind: "video",
+        trackIndex: trackIndex,
+        track: trackLabel(trackIndex),
+        clipIndex: clipIndex,
+        nodeId: itemNodeId(clip),
+        name: safeName(clip),
+        selected: PremiereBridge._clipSelectionState(clip),
+        start: summarizeTicks(startTicks),
+        end: summarizeTicks(endTicks),
+        components: summarizeComponents(clip)
+      };
+    }
+
+    function collectSelectedVideoClips() {
+      var targets = [];
+      var trackCount = PremiereBridge._collectionCount(sequence.videoTracks, 64);
+      for (var t = 0; t < trackCount; t++) {
+        var track = null;
+        try {
+          track = sequence.videoTracks[t];
+        } catch (errTrack) {
+        }
+        if (!track || !track.clips) {
+          continue;
+        }
+        var clipCount = PremiereBridge._collectionCount(track.clips, 512);
+        for (var c = 0; c < clipCount; c++) {
+          var clip = null;
+          try {
+            clip = track.clips[c];
+          } catch (errClip) {
+          }
+          if (!clip || !PremiereBridge._clipSelectionState(clip)) {
+            continue;
+          }
+          targets.push({
+            clip: clip,
+            trackIndex: t,
+            clipIndex: c,
+            before: summarizeClip(clip, t, c)
+          });
+        }
+      }
+      return targets;
+    }
+
+    function isIntrinsicComponent(summary) {
+      var name = normalizeName(summary && summary.name);
+      var matchName = normalizeName(summary && summary.matchName);
+      return name === "motion" ||
+        name === "opacity" ||
+        name === "timeremapping" ||
+        matchName === normalizeName("AE.ADBE Motion") ||
+        matchName === normalizeName("AE.ADBE Opacity") ||
+        matchName === normalizeName("AE.ADBE Time Remapping");
+    }
+
+    function componentMatchesEffect(summary) {
+      if (!summary) {
+        return false;
+      }
+      return normalizeName(summary.name) === normalizeName(effectName) ||
+        normalizeName(summary.matchName) === normalizeName(effectName);
+    }
+
+    function collectMatchingComponentSummaries(components) {
+      var matches = [];
+      for (var i = 0; i < components.length; i++) {
+        if (componentMatchesEffect(components[i])) {
+          matches.push(components[i]);
+        }
+      }
+      return matches;
+    }
+
+    function findMatchingComponents(clip) {
+      var matches = [];
+      var collection = null;
+      try {
+        collection = clip && clip.components ? clip.components : null;
+      } catch (errComponentCollection) {
+      }
+      var count = PremiereBridge._collectionCount(collection, 128);
+      for (var i = 0; i < count; i++) {
+        var component = null;
+        try {
+          component = collection[i];
+        } catch (errComponent) {
+        }
+        if (!component) {
+          continue;
+        }
+        var summary = summarizeComponent(component, i);
+        var nameMatches = componentMatchesEffect(summary);
+        var indexMatches = componentIndex !== null && i === componentIndex;
+        if ((componentIndex !== null && indexMatches && nameMatches) || (componentIndex === null && nameMatches)) {
+          matches.push({
+            component: component,
+            index: i,
+            summary: summary
+          });
+        }
+      }
+      return matches;
+    }
+
+    function componentCollectionAvailability(clip) {
+      var collection = null;
+      try {
+        collection = clip && clip.components ? clip.components : null;
+      } catch (errCollection) {
+      }
+      return {
+        methodNames: reflectNames(collection, "methods"),
+        propertyNames: reflectNames(collection, "properties")
+      };
+    }
+
+    function getQeItemCount(track) {
+      if (!track) {
+        return null;
+      }
+      try {
+        if (track.numItems !== undefined && track.numItems !== null) {
+          var n = typeof track.numItems === "function" ? Number(track.numItems()) : Number(track.numItems);
+          if (!isNaN(n) && n >= 0) {
+            return Math.round(n);
+          }
+        }
+      } catch (errNumItems) {
+      }
+      return null;
+    }
+
+    function qeItemTimes(item) {
+      return {
+        startTicks: timeValueToTicks(item && item.start !== undefined ? item.start : null),
+        endTicks: timeValueToTicks(item && item.end !== undefined ? item.end : null)
+      };
+    }
+
+    function closeEnoughTicks(actual, expected) {
+      if (actual === null || actual === undefined || expected === null || expected === undefined) {
+        return false;
+      }
+      var a = Number(actual);
+      var e = Number(expected);
+      if (isNaN(a) || isNaN(e)) {
+        return false;
+      }
+      var oneFrameTicks = null;
+      try {
+        oneFrameTicks = PremiereBridge._frameToTicks(1, sequence, qeSeq) - PremiereBridge._frameToTicks(0, sequence, qeSeq);
+      } catch (errFrameTicks) {
+      }
+      if (oneFrameTicks === null || isNaN(Number(oneFrameTicks)) || Number(oneFrameTicks) <= 0) {
+        oneFrameTicks = PremiereBridge.TICKS_PER_SECOND / 60;
+      }
+      return Math.abs(a - e) <= Math.max(2, Math.round(Number(oneFrameTicks) / 2));
+    }
+
+    function findQeTrackItem(target) {
+      var errors = [];
+      if (!qeSeq) {
+        return { item: null, method: null, directExpression: null, errors: ["QE sequence unavailable"] };
+      }
+      if (!qeSeq.getVideoTrackAt) {
+        return { item: null, method: null, directExpression: null, errors: ["QE getVideoTrackAt unavailable"] };
+      }
+      var qeTrack = null;
+      try {
+        qeTrack = qeSeq.getVideoTrackAt(target.trackIndex);
+      } catch (errQeTrack) {
+        return { item: null, method: null, directExpression: null, errors: ["QE track lookup failed: " + String(errQeTrack)] };
+      }
+      if (!qeTrack || !qeTrack.getItemAt) {
+        return { item: null, method: null, directExpression: null, errors: ["QE track item lookup unavailable"] };
+      }
+
+      var wantedStart = target.before.start && target.before.start.ticks !== null ? Number(target.before.start.ticks) : null;
+      var wantedEnd = target.before.end && target.before.end.ticks !== null ? Number(target.before.end.ticks) : null;
+      var count = getQeItemCount(qeTrack);
+      var limit = count !== null ? Math.min(count, 512) : 512;
+      var misses = 0;
+      for (var i = 0; i < limit; i++) {
+        var item = null;
+        var itemExpression = "qe.project.getActiveSequence().getVideoTrackAt(" + target.trackIndex + ").getItemAt(" + i + ")";
+        try {
+          item = qeTrack.getItemAt(i);
+        } catch (errQeItem) {
+          try {
+            item = eval(itemExpression);
+          } catch (errQeItemDirect) {
+            errors.push("qeTrack.getItemAt(" + i + "): " + String(errQeItem) + "; " + itemExpression + ": " + String(errQeItemDirect));
+            if (count === null) {
+              break;
+            }
+          }
+        }
+        if (!item) {
+          misses++;
+          if (count === null && misses > 12) {
+            break;
+          }
+          continue;
+        }
+        misses = 0;
+        var times = qeItemTimes(item);
+        if (closeEnoughTicks(times.startTicks, wantedStart) && closeEnoughTicks(times.endTicks, wantedEnd)) {
+          return {
+            item: item,
+            method: "qe.getVideoTrackAt(" + target.trackIndex + ").getItemAt(" + i + ")",
+            directExpression: itemExpression,
+            errors: errors
+          };
+        }
+      }
+      return {
+        item: null,
+        method: null,
+        directExpression: null,
+        errors: errors.length ? errors : ["No matching QE video track item found"]
+      };
+    }
+
+    function qeTargetAvailability(target) {
+      var qeMatch = findQeTrackItem(target);
+      return {
+        found: !!qeMatch.item,
+        method: qeMatch.method,
+        errors: qeMatch.errors,
+        itemMethodNames: reflectNames(qeMatch.item, "methods"),
+        itemPropertyNames: reflectNames(qeMatch.item, "properties")
+      };
+    }
+
+    function qeComponentCount(qeItem) {
+      if (!qeItem) {
+        return 0;
+      }
+      try {
+        if (qeItem.numComponents !== undefined && qeItem.numComponents !== null) {
+          var n = typeof qeItem.numComponents === "function" ? Number(qeItem.numComponents()) : Number(qeItem.numComponents);
+          if (!isNaN(n) && n >= 0) {
+            return Math.min(128, Math.round(n));
+          }
+        }
+      } catch (errNumComponents) {
+      }
+      return 0;
+    }
+
+    function summarizeQeComponent(qeComponent, index) {
+      return {
+        index: index,
+        name: safeName(qeComponent),
+        matchName: safeMatchName(qeComponent),
+        methodNames: reflectNames(qeComponent, "methods"),
+        propertyNames: reflectNames(qeComponent, "properties")
+      };
+    }
+
+    function summarizeQeComponents(target) {
+      var qeMatch = findQeTrackItem(target);
+      var summaries = [];
+      var errors = qeMatch.errors ? qeMatch.errors.slice(0) : [];
+      if (!qeMatch.item) {
+        return {
+          found: false,
+          method: qeMatch.method,
+          errors: errors,
+          components: summaries
+        };
+      }
+      if (!qeMatch.item.getComponentAt) {
+        errors.push("qeItem.getComponentAt unavailable");
+        return {
+          found: true,
+          method: qeMatch.method,
+          errors: errors,
+          components: summaries
+        };
+      }
+      var count = qeComponentCount(qeMatch.item);
+      for (var i = 0; i < count; i++) {
+        try {
+          var qeComponent = qeMatch.item.getComponentAt(i);
+          summaries.push(summarizeQeComponent(qeComponent, i));
+        } catch (errQeComponent) {
+          errors.push("qeItem.getComponentAt(" + i + "): " + String(errQeComponent));
+        }
+      }
+      return {
+        found: true,
+        method: qeMatch.method,
+        errors: errors,
+        componentCount: count,
+        components: summaries
+      };
+    }
+
+    function removeComponent(target, match) {
+      var errors = [];
+      if (match.component && match.component.remove) {
+        try {
+          match.component.remove();
+          return { ok: true, method: "component.remove()" };
+        } catch (errComponentRemove) {
+          errors.push("component.remove(): " + String(errComponentRemove));
+        }
+      } else {
+        errors.push("component.remove unavailable");
+      }
+
+      var collection = null;
+      try {
+        collection = target.clip && target.clip.components ? target.clip.components : null;
+      } catch (errCollection) {
+      }
+      if (collection && collection.remove) {
+        try {
+          collection.remove(match.component);
+          return { ok: true, method: "clip.components.remove(component)" };
+        } catch (errCollectionRemoveObject) {
+          errors.push("clip.components.remove(component): " + String(errCollectionRemoveObject));
+        }
+        try {
+          collection.remove(match.index);
+          return { ok: true, method: "clip.components.remove(index)" };
+        } catch (errCollectionRemoveIndex) {
+          errors.push("clip.components.remove(index): " + String(errCollectionRemoveIndex));
+        }
+      } else {
+        errors.push("clip.components.remove unavailable");
+      }
+      if (collection && collection.removeAt) {
+        try {
+          collection.removeAt(match.index);
+          return { ok: true, method: "clip.components.removeAt(index)" };
+        } catch (errCollectionRemoveAt) {
+          errors.push("clip.components.removeAt(index): " + String(errCollectionRemoveAt));
+        }
+      } else {
+        errors.push("clip.components.removeAt unavailable");
+      }
+
+      var qeMatch = findQeTrackItem(target);
+      if (qeMatch.item && qeMatch.item.getComponentAt) {
+        try {
+          var qeComponent = qeMatch.item.getComponentAt(match.index);
+          var qeSummary = summarizeQeComponent(qeComponent, match.index);
+          if (!componentMatchesEffect(qeSummary)) {
+            errors.push("qeItem.getComponentAt(" + match.index + ") returned different component: " + qeSummary.name + " / " + qeSummary.matchName);
+          } else if (!qeComponent || !qeComponent.remove) {
+            errors.push("qeComponent.remove unavailable");
+          } else {
+            qeComponent.remove();
+            return {
+              ok: true,
+              method: (qeMatch.method || "qeTrackItem") + ".getComponentAt(" + match.index + ").remove()"
+            };
+          }
+        } catch (errQeRemove) {
+          errors.push("qeComponent.remove(): " + String(errQeRemove));
+        }
+      } else {
+        errors.push("QE component remove unavailable: " + ((qeMatch.errors && qeMatch.errors.join("; ")) || "no matching QE item"));
+      }
+
+      return {
+        ok: false,
+        method: null,
+        error: errors.join("; "),
+        availability: {
+          component: {
+            methodNames: reflectNames(match.component, "methods"),
+            propertyNames: reflectNames(match.component, "properties")
+          },
+          qeTarget: qeTargetAvailability(target),
+          qeComponents: summarizeQeComponents(target),
+          componentCollection: componentCollectionAvailability(target.clip)
+        }
+      };
+    }
+
+    function criteriaSummary() {
+      return {
+        name: effectName,
+        selected: selectedOnly,
+        allMatches: allMatches,
+        allComponentMatches: allComponentMatches,
+        componentIndex: componentIndex
+      };
+    }
+
+    var targets = collectSelectedVideoClips();
+    if (!targets.length) {
+      return PremiereBridge._err("No selected video clip found");
+    }
+    if (targets.length > 1 && !allMatches) {
+      var selectedSample = [];
+      for (var s = 0; s < Math.min(5, targets.length); s++) {
+        selectedSample.push(targets[s].before);
+      }
+      return PremiereBridge._err("Multiple selected video clips found. Add --all-matches or select one clip.", {
+        selectedCount: targets.length,
+        selectedSample: selectedSample
+      });
+    }
+    var selectedTargets = allMatches ? targets : [targets[0]];
+
+    var prepared = [];
+    for (var prep = 0; prep < selectedTargets.length; prep++) {
+      var target = selectedTargets[prep];
+      var matches = findMatchingComponents(target.clip);
+      if (!matches.length) {
+        return PremiereBridge._err("Effect component not found: " + effectName, {
+          criteria: criteriaSummary(),
+          target: target.before,
+          availableComponents: summarizeComponents(target.clip)
+        });
+      }
+      var blocked = [];
+      for (var b = 0; b < matches.length; b++) {
+        if (isIntrinsicComponent(matches[b].summary)) {
+          blocked.push(matches[b].summary);
+        }
+      }
+      if (blocked.length) {
+        return PremiereBridge._err("Refusing to remove intrinsic clip component: " + effectName, {
+          criteria: criteriaSummary(),
+          target: target.before,
+          blockedComponents: blocked
+        });
+      }
+      if (matches.length > 1 && componentIndex === null && !allComponentMatches) {
+        var matchSample = [];
+        for (var m = 0; m < matches.length; m++) {
+          matchSample.push(matches[m].summary);
+        }
+        return PremiereBridge._err("Multiple matching effect components found. Provide --component-index or --all-component-matches.", {
+          criteria: criteriaSummary(),
+          target: target.before,
+          matchingComponents: matchSample
+        });
+      }
+      prepared.push({
+        target: target,
+        matches: allComponentMatches ? matches : [matches[0]]
+      });
+    }
+
+    if (payload.dryRun === true) {
+      var dryMatches = [];
+      for (var d = 0; d < prepared.length; d++) {
+        var dryComponentMatches = [];
+        for (var dc = 0; dc < prepared[d].matches.length; dc++) {
+          dryComponentMatches.push(prepared[d].matches[dc].summary);
+        }
+        dryMatches.push({
+          target: prepared[d].target.before,
+          componentsToRemove: dryComponentMatches
+        });
+      }
+      return PremiereBridge._ok({
+        dryRun: true,
+        skipped: true,
+        criteria: criteriaSummary(),
+        selectedCount: targets.length,
+        targetCount: prepared.length,
+        matches: dryMatches
+      });
+    }
+
+    var changed = [];
+    var errors = [];
+    for (var i = 0; i < prepared.length; i++) {
+      var item = prepared[i];
+      var removeMatches = item.matches.slice(0);
+      removeMatches.sort(function (a, b) {
+        return b.index - a.index;
+      });
+      var before = summarizeClip(item.target.clip, item.target.trackIndex, item.target.clipIndex);
+      var beforeMatchingCount = collectMatchingComponentSummaries(before.components).length;
+      var removed = [];
+      var removeErrors = [];
+      for (var r = 0; r < removeMatches.length; r++) {
+        var removeResult = removeComponent(item.target, removeMatches[r]);
+        if (removeResult.ok) {
+          removed.push({
+            method: removeResult.method,
+            before: removeMatches[r].summary
+          });
+        } else {
+          removeErrors.push({
+            before: removeMatches[r].summary,
+            error: removeResult.error,
+            availability: removeResult.availability
+          });
+        }
+      }
+      var after = summarizeClip(item.target.clip, item.target.trackIndex, item.target.clipIndex);
+      var afterMatchingComponents = collectMatchingComponentSummaries(after.components);
+      var expectedRemoved = removed.length;
+      var componentCountDecreased = after.components.length === before.components.length - expectedRemoved;
+      var matchingCountDecreased = afterMatchingComponents.length === beforeMatchingCount - expectedRemoved;
+      var verified = removeErrors.length === 0 && expectedRemoved > 0 && componentCountDecreased && matchingCountDecreased;
+      var resultEntry = {
+        target: {
+          before: before,
+          after: after
+        },
+        removed: removed,
+        requested: {
+          name: effectName,
+          removedComponentCount: expectedRemoved
+        },
+        verification: {
+          componentCountDecreased: componentCountDecreased,
+          matchingCountBefore: beforeMatchingCount,
+          matchingCountAfter: afterMatchingComponents.length,
+          matchingCountDecreased: matchingCountDecreased,
+          remainingMatchingComponents: afterMatchingComponents
+        }
+      };
+      if (verified) {
+        changed.push(resultEntry);
+      } else {
+        resultEntry.error = removeErrors.length ? "One or more component-removal attempts failed" : "Effect removal did not verify in clip components";
+        resultEntry.errors = removeErrors;
+        errors.push(resultEntry);
+      }
+    }
+
+    if (errors.length) {
+      return PremiereBridge._err("Failed to remove one or more video effects", {
+        criteria: criteriaSummary(),
+        changedCount: changed.length,
+        errorCount: errors.length,
+        changed: changed,
+        errors: errors
+      });
+    }
+
+    return PremiereBridge._ok({
+      criteria: criteriaSummary(),
+      changedCount: changed.length,
+      changed: changed
+    });
+  } catch (err) {
+    return PremiereBridge._err(String(err));
+  }
+};
+
 PremiereBridge.setTransition = function (jsonStr) {
   try {
     var payload = PremiereBridge._parse(jsonStr) || {};

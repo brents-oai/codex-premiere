@@ -683,6 +683,7 @@
     "setClipSpeedDuration",
     "addEffect",
     "setEffectParam",
+    "removeEffect",
     "setTransition",
     "replaceClipSource",
     "nestSelectedClips",
@@ -1063,6 +1064,12 @@
         return evalExtendScript("setEffectParam", Object.assign({}, cleanPayload, { dryRun: true }));
       }
       return evalExtendScript("setEffectParam", cleanPayload);
+    }
+    if (command === "removeEffect") {
+      if (dryRun) {
+        return evalExtendScript("removeEffect", Object.assign({}, cleanPayload, { dryRun: true }));
+      }
+      return evalExtendScript("removeEffect", cleanPayload);
     }
     if (command === "setTransition") {
       if (dryRun) {
