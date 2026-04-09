@@ -64,6 +64,7 @@ On macOS, `get-playhead` also verifies the visible Premiere timecode from the UI
 ./cli/premiere-bridge.js set-clip-speed-duration --transport cep --track V1 --timecode "00;00;10;00" --speed-percent 50
 ./cli/premiere-bridge.js add-effect --transport cep --name "Roughen Edges" --selected
 ./cli/premiere-bridge.js set-effect-param --transport cep --effect "Roughen Edges" --param "Border" --value 12 --selected
+./cli/premiere-bridge.js remove-effect --transport cep --name "Roughen Edges" --selected
 ./cli/premiere-bridge.js set-transition --transport cep --state present --track V1 --timecode "00;00;10;00" --name "Cross Dissolve" --duration-frames 15
 ./cli/premiere-bridge.js replace-clip-source --transport cep --track V1 --timecode "00;00;10;00" --item-id 123456
 ./cli/premiere-bridge.js nest-selected-clips --transport cep --name "Nested Host Intro"
@@ -166,6 +167,14 @@ Color indices:
 - Dry-run the command first to verify the matched clip/component/parameter without changing Premiere.
 - The command is CEP-only. It calls the DOM `ComponentParam.setValue(...)` method and verifies the write through component-parameter readback.
 
+`remove-effect` targeting flags:
+- Remove one named non-intrinsic effect component from the selected timeline video clip.
+- Provide the effect with `--name`, for example `--name "Roughen Edges"`.
+- Target the current timeline selection with `--selected`. If exactly one video clip is selected, `--selected` is assumed.
+- Disambiguate duplicate effect components with `--component-index N`, or remove every matching component on the selected clip with `--all-component-matches`.
+- Remove the effect from every selected video clip by adding `--all-matches`; otherwise the bridge errors on multi-clip selections and returns a sample of the selected clips.
+- The command is CEP-only. It refuses fixed/intrinsic components such as Motion and Opacity, attempts host component-removal APIs, then verifies the clip component list decreased and the matching effect count changed as expected.
+
 `set-transition` edit-point flags:
 - Set explicit transition state at a clip edge with `--state present` or `--state absent`.
 - Target one edit point with `--track V1|A1` plus exactly one of `--timecode`, `--frame`, `--seconds`, or `--ticks`.
@@ -211,6 +220,7 @@ Color indices:
 - `set-clip-speed-duration` (CEP only; set clip speed by selection, name, and/or exact track/time selectors)
 - `add-effect` (CEP only; add a named video effect to the selected timeline clip)
 - `set-effect-param` (CEP only; set one parameter on an existing effect component on the selected timeline clip)
+- `remove-effect` (CEP only; remove a named non-intrinsic effect component from the selected timeline clip)
 - `set-transition` (CEP only; set a transition present or absent at one track edit point)
 - `replace-clip-source` (CEP only; replace one targeted timeline clip's source with a project item)
 - `nest-selected-clips` (CEP only; replace the active selected clip range with one nested sequence clip)
